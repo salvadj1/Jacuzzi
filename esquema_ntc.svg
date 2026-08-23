@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" font-family="Courier New, monospace">
+<rect width="900" height="480" fill="#0b1210"/>
+<style>
+.wire{stroke:#6f8177;stroke-width:2.5;fill:none;}
+.lbl{fill:#d8e2dd;font-size:14px;}
+.val{fill:#e8a33d;font-size:13px;font-weight:bold;}
+.pin{fill:#4fd67a;font-size:13px;font-weight:bold;}
+.box{fill:#101a17;stroke:#22332c;stroke-width:2;}
+.res{fill:none;stroke:#e8a33d;stroke-width:2.5;}
+.ntc{fill:none;stroke:#2fa6c9;stroke-width:2.5;}
+.dot{fill:#d8e2dd;}
+</style>
+
+<!-- ================= CIRCUITO T1 ================= -->
+<text x="60" y="40" class="lbl" font-size="17" fill="#e8a33d">T1 · Jacuzzi</text>
+
+<!-- 3.3V rail -->
+<text x="60" y="70" class="lbl">3.3V</text>
+<line x1="110" y1="65" x2="220" y2="65" class="wire"/>
+
+<!-- Resistencia fija 10k -->
+<path d="M220,65 L230,65 L235,52 L245,78 L255,52 L265,78 L275,52 L280,65 L290,65" class="res"/>
+<text x="215" y="45" class="val">10kΩ</text>
+
+<!-- Nodo intermedio -> GPIO15 -->
+<circle cx="290" cy="65" r="4" class="dot"/>
+<line x1="290" y1="65" x2="290" y2="140" class="wire"/>
+<line x1="290" y1="140" x2="420" y2="140" class="wire"/>
+<text x="300" y="130" class="lbl">Nodo (señal)</text>
+
+<!-- NTC hacia GND -->
+<line x1="290" y1="65" x2="290" y2="65" class="wire"/>
+<path d="M290,65 L290,90 L280,95 L300,102 L280,109 L300,116 L280,123 L290,128 L290,150" class="ntc" transform="translate(0,0)"/>
+<text x="255" y="105" class="lbl" fill="#2fa6c9">NTC T1</text>
+<line x1="290" y1="150" x2="290" y2="170" class="wire"/>
+<text x="270" y="190" class="lbl">GND</text>
+
+<!-- ================= CIRCUITO T2 ================= -->
+<text x="60" y="270" class="lbl" font-size="17" fill="#e8a33d">T2 · Solar</text>
+
+<text x="60" y="300" class="lbl">3.3V</text>
+<line x1="110" y1="295" x2="220" y2="295" class="wire"/>
+
+<path d="M220,295 L230,295 L235,282 L245,308 L255,282 L265,308 L275,282 L280,295 L290,295" class="res"/>
+<text x="215" y="275" class="val">10kΩ</text>
+
+<circle cx="290" cy="295" r="4" class="dot"/>
+<line x1="290" y1="295" x2="290" y2="370" class="wire"/>
+<line x1="290" y1="370" x2="420" y2="370" class="wire"/>
+<text x="300" y="360" class="lbl">Nodo (señal)</text>
+
+<path d="M290,295 L290,320 L280,325 L300,332 L280,339 L300,346 L280,353 L290,358 L290,380" class="ntc"/>
+<text x="255" y="335" class="lbl" fill="#2fa6c9">NTC T2</text>
+<line x1="290" y1="380" x2="290" y2="400" class="wire"/>
+<text x="270" y="420" class="lbl">GND</text>
+
+<!-- ================= ESP32-CAM ================= -->
+<rect x="420" y="90" width="220" height="330" rx="10" class="box"/>
+<text x="450" y="120" class="lbl" font-size="16" fill="#d8e2dd">ESP32 DevKit</text>
+
+<circle cx="420" cy="140" r="4" class="dot"/>
+<text x="565" y="145" class="pin">GPIO 32 (T1)</text>
+
+<circle cx="420" cy="370" r="4" class="dot"/>
+<text x="565" y="375" class="pin">GPIO 33 (T2)</text>
+
+<circle cx="420" cy="200" r="4" class="dot"/>
+<line x1="60" y1="65" x2="60" y2="200" class="wire"/>
+<line x1="60" y1="200" x2="420" y2="200" class="wire"/>
+<text x="565" y="205" class="lbl">3.3V</text>
+
+<circle cx="420" cy="260" r="4" class="dot"/>
+<line x1="270" y1="170" x2="270" y2="260" class="wire"/>
+<line x1="270" y1="400" x2="270" y2="260" class="wire"/>
+<line x1="270" y1="260" x2="420" y2="260" class="wire"/>
+<text x="565" y="265" class="lbl">GND</text>
+
+<text x="60" y="460" class="lbl" fill="#6f8177">Nota: las sondas no tienen polaridad (son resistencias), conecta sus 2 hilos indistintamente a "Nodo" y "GND".</text>
+</svg>
