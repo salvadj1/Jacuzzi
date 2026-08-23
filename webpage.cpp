@@ -182,13 +182,13 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
 <g transform="translate(0,245)">
 
-  <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), tramos rectos acortados 60% (mas cerca del filtro) ===== -->
-  <path class="pipe" d="M 320,570 L 320,458 L 320,418 A 10,10 0 0 1 341.33,418 L 341.33,458 A 10,10 0 0 0 362.67,458 L 362.67,418 A 10,10 0 0 1 384,418 L 384,458 A 10,10 0 0 0 405.33,458 L 405.33,418 A 10,10 0 0 1 426.67,418 L 426.67,458 A 10,10 0 0 0 448,458 L 448,418 A 10,10 0 0 1 469.33,418 L 469.33,458 A 10,10 0 0 0 490.67,458 L 490.67,418 A 10,10 0 0 1 512,418 L 512,458 L 512,570"/>
-  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,458 L 320,418 A 10,10 0 0 1 341.33,418 L 341.33,458 A 10,10 0 0 0 362.67,458 L 362.67,418 A 10,10 0 0 1 384,418 L 384,458 A 10,10 0 0 0 405.33,458 L 405.33,418 A 10,10 0 0 1 426.67,418 L 426.67,458 A 10,10 0 0 0 448,458 L 448,418 A 10,10 0 0 1 469.33,418 L 469.33,458 A 10,10 0 0 0 490.67,458 L 490.67,418 A 10,10 0 0 1 512,418 L 512,458"/>
-  <path class="flow hot" id="flowFromSerp" d="M 512,458 L 512,570"/>
+  <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
+  <path class="pipe" d="M 320,570 L 320,290 L 320,250 A 10,10 0 0 1 341.33,250 L 341.33,290 A 10,10 0 0 0 362.67,290 L 362.67,250 A 10,10 0 0 1 384,250 L 384,290 A 10,10 0 0 0 405.33,290 L 405.33,250 A 10,10 0 0 1 426.67,250 L 426.67,290 A 10,10 0 0 0 448,290 L 448,250 A 10,10 0 0 1 469.33,250 L 469.33,290 A 10,10 0 0 0 490.67,290 L 490.67,250 A 10,10 0 0 1 512,250 L 512,290 L 512,570"/>
+  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,290 L 320,250 A 10,10 0 0 1 341.33,250 L 341.33,290 A 10,10 0 0 0 362.67,290 L 362.67,250 A 10,10 0 0 1 384,250 L 384,290 A 10,10 0 0 0 405.33,290 L 405.33,250 A 10,10 0 0 1 426.67,250 L 426.67,290 A 10,10 0 0 0 448,290 L 448,250 A 10,10 0 0 1 469.33,250 L 469.33,290 A 10,10 0 0 0 490.67,290 L 490.67,250 A 10,10 0 0 1 512,250 L 512,290"/>
+  <path class="flow hot" id="flowFromSerp" d="M 512,290 L 512,570"/>
 
   <g id="badgeT2">
-    <circle cx="416" cy="380" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
+    <circle cx="416" cy="326" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
   </g>
 
   <!-- ===== JACUZZI ===== -->
@@ -251,8 +251,8 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
     <text x="54" y="594.5" text-anchor="middle" class="val" id="tempJacuzzi" font-size="14">— °C</text>
 
-    <text x="416" y="383.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
-    <text x="416" y="404" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
+    <text x="416" y="329.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
+    <text x="416" y="350" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
 
     <text x="250" y="602" text-anchor="middle" class="lbl">MOTOR</text>
     <text x="320" y="602" text-anchor="middle" class="lbl">V1</text>
@@ -384,7 +384,7 @@ function renderSchedule(){
   if(!state) return;
   const s = state.schedule;
 
-  el('statClock').textContent = estimatedNow().toLocaleDateString('es-ES') + ' ' + estimatedNow().toLocaleTimeString('es-ES');
+  el('statClock').textContent = estimatedNow().toLocaleTimeString('es-ES');
   const diasTxt = s.days.map((on,i)=> on ? DIAS_LBL[i] : null).filter(Boolean).join(' ');
   el('progText').textContent =
     `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)} · ${diasTxt}`;

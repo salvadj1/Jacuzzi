@@ -171,7 +171,7 @@ void webServerBegin() {
   // de por la red domestica), se sirve el portal de gestion de WiFi en
   // su lugar: comparten servidor y ruta, pero no deben mostrar lo mismo.
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (wifiRequestIsFromAp(request)) {
+    if (wifiRequestIsFromAp(request) && !wifiIsPermanentApMode()) {
       wifiSendConfigPage(request);
       return;
     }

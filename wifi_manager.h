@@ -46,6 +46,10 @@ bool wifiIsConnected();
 // Indica si el punto de acceso de configuracion esta activo ahora mismo
 bool wifiIsApActive();
 
+// Indica si el modo guardado es "AP permanente" (no se intenta conectar
+// a ninguna red domestica y el punto de acceso nunca se cierra solo)
+bool wifiIsPermanentApMode();
+
 // Distingue por que interfaz de red llego una peticion HTTP: true si
 // entro por el punto de acceso de configuracion (192.168.4.x), false si
 // entro por la red domestica (STA). Es necesario porque ambas comparten

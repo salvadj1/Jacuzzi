@@ -26,6 +26,12 @@ static bool routesRegistered = false; // las rutas solo se registran una vez, au
 static unsigned long apOpenedAt = 0;
 static unsigned long lastReconnectAttempt = 0;
 
+// Modo de conexion elegido por el usuario (persistido en NVS):
+// 0 = usar redes wifi disponibles, 1 = AP permanente. Ver storage.h.
+#define WIFI_MODE_AUTO_NETWORKS 0
+#define WIFI_MODE_AP_PERMANENT  1
+static int wifiMode = WIFI_MODE_AUTO_NETWORKS;
+
 // Pagina de gestion de WiFi (captive portal). Permite escanear y añadir
 // redes, subir/bajar su prioridad, eliminarlas, y guardar+reiniciar.
 static const char CONFIG_PAGE[] PROGMEM = R"HTML(
@@ -45,8 +51,18 @@ button.peligro{background:#e2513f;color:#fff;}
 .conocida .prio{color:#6f8177;font-size:11px;width:18px;}
 .conocida button{padding:4px 8px;margin:0;font-size:12px;}
 .salir{width:100%;margin-top:24px;padding:12px;font-size:14px;}
+.modo-wifi{display:flex;gap:8px;margin-bottom:4px;}
+.modo-wifi button{flex:1;margin:0;background:#16211c;color:#d8e2dd;border:1px solid #22332c;font-weight:normal;}
+.modo-wifi button.active{border-color:#4fd67a;color:#4fd67a;}
+#modoHint{font-size:11px;color:#6f8177;margin:6px 0 18px;}
 </style></head><body>
 <h2>Configuracion WiFi - Jacuzzi ESP32</h2>
+
+<div class="modo-wifi">
+  <button id="btnModoAuto">USAR REDES WIFI DISPONIBLES</button>
+  <button id="btnModoAP">USAR CONEXION AP PERMANENTE</button>
+</div>
+<p id="modoHint">Comprobando modo actual...</p>
 
 <div id="estadoConexion" style="font-size:12px;color:#6f8177;margin-bottom:10px;">Comprobando conexion actual...</div>
 
@@ -63,14 +79,32 @@ button.peligro{background:#e2513f;color:#fff;}
 <button class="salir" id="btnSalir">GUARDAR Y SALIR (reinicia el ESP32)</button>
 
 <script>
+function marcarModo(mode){
+  document.getElementById('btnModoAuto').classList.toggle('active', mode==0);
+  document.getElementById('btnModoAP').classList.toggle('active', mode==1);
+  document.getElementById('modoHint').textContent = mode==1
+    ? 'El punto de acceso permanecera siempre activo, sin intentar conectar a ninguna red domestica.'
+    : 'Se intentara conectar a tus redes guardadas; el punto de acceso se cerrara al conseguirlo.';
+}
+
 function cargarEstado(){
   fetch('/api/estado').then(r=>r.json()).then(e=>{
     const cont = document.getElementById('estadoConexion');
     cont.textContent = e.connected
       ? `Conectado actualmente a "${e.ssid}" · IP: ${e.ip}`
       : 'Sin conexion a ninguna red domestica en este momento';
+    marcarModo(e.wifiMode);
   });
 }
+
+document.getElementById('btnModoAuto').onclick = ()=>{
+  fetch('/modo-wifi', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'mode=0' })
+    .then(()=> marcarModo(0));
+};
+document.getElementById('btnModoAP').onclick = ()=>{
+  fetch('/modo-wifi', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'mode=1' })
+    .then(()=> marcarModo(1));
+};
 
 function cargarConocidas(){
   fetch('/api/networks').then(r=>r.json()).then(list=>{
@@ -206,8 +240,26 @@ static void registerCaptiveRoutes() {
     bool connected = (WiFi.status() == WL_CONNECTED);
     String json = "{\"connected\":" + String(connected ? "true" : "false") +
                   ",\"ssid\":\"" + (connected ? WiFi.SSID() : "") + "\"" +
-                  ",\"ip\":\"" + (connected ? WiFi.localIP().toString() : "") + "\"}";
+                  ",\"ip\":\"" + (connected ? WiFi.localIP().toString() : "") + "\"" +
+                  ",\"wifiMode\":" + String(wifiMode) + "}";
     request->send(200, "application/json", json);
+  });
+
+  server.on("/modo-wifi", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!apActive) { request->send(404); return; }
+    int mode = request->arg("mode").toInt();
+    if (mode != WIFI_MODE_AUTO_NETWORKS && mode != WIFI_MODE_AP_PERMANENT) { request->send(400); return; }
+    wifiMode = mode;
+    storageSaveWifiMode(wifiMode);
+    if (wifiMode == WIFI_MODE_AUTO_NETWORKS) {
+      // Reinicia la ventana de cierre automatico: si ya habian pasado
+      // los 5 min mientras estaba en modo permanente, el AP no debe
+      // cerrarse de golpe nada mas volver a modo automatico.
+      apOpenedAt = millis();
+    }
+    Serial.printf("[WIFI] Modo de conexion cambiado a: %s\n",
+      wifiMode == WIFI_MODE_AP_PERMANENT ? "AP PERMANENTE" : "REDES DISPONIBLES");
+    request->send(200, "text/plain", "OK");
   });
 
   server.on("/api/networks", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -258,6 +310,14 @@ static void registerCaptiveRoutes() {
     request->send(200, "text/plain", "OK");
     delay(800);
     ESP.restart();
+  });
+
+  // Acceso directo al portal de configuracion, util cuando la raiz "/"
+  // esta sirviendo la app de control (modo AP permanente) o cuando se
+  // navega desde la red domestica tras activar el AP bajo demanda.
+  server.on("/wifi-config", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!apActive) { request->send(404); return; }
+    wifiSendConfigPage(request);
   });
 
   // Cualquier otra ruta no reconocida QUE LLEGUE POR EL AP: sirve la
@@ -312,7 +372,16 @@ void setupWifi() {
   WiFi.mode(WIFI_AP_STA); // AP y STA simultaneos: no son excluyentes en el ESP32
   WiFi.setHostname(DEVICE_HOSTNAME);
 
+  storageLoadWifiMode(wifiMode);
+  Serial.printf("[WIFI] Modo de conexion cargado: %s\n",
+    wifiMode == WIFI_MODE_AP_PERMANENT ? "AP PERMANENTE" : "REDES DISPONIBLES");
+
   startConfigPortal(); // red de seguridad: se abre siempre al arrancar
+
+  if (wifiMode == WIFI_MODE_AP_PERMANENT) {
+    Serial.println("[WIFI] Modo AP permanente: no se intentara conectar a ninguna red domestica");
+    return;
+  }
 
   String ssid, pass;
   if (findBestKnownNetwork(ssid, pass) >= 0) {
@@ -326,12 +395,15 @@ void loopWifi() {
     dnsServer.processNextRequest();
 
     // Cierra el AP solo si: ya paso la ventana de tiempo Y ya hay STA
-    // conectado. Si nunca hubo conexion, se queda abierto (unica via
-    // de entrada que le queda al usuario).
-    if (millis() - apOpenedAt > AP_CONFIG_WINDOW_MS && WiFi.status() == WL_CONNECTED) {
+    // conectado Y no estamos en modo AP permanente. En modo permanente
+    // el AP nunca se cierra solo, sea cual sea el estado de la STA.
+    if (wifiMode != WIFI_MODE_AP_PERMANENT &&
+        millis() - apOpenedAt > AP_CONFIG_WINDOW_MS && WiFi.status() == WL_CONNECTED) {
       closeConfigPortal();
     }
   }
+
+  if (wifiMode == WIFI_MODE_AP_PERMANENT) return; // no se intenta STA en este modo
 
   if (WiFi.status() != WL_CONNECTED && millis() - lastReconnectAttempt > 10000) {
     lastReconnectAttempt = millis();
@@ -364,4 +436,8 @@ bool wifiIsConnected() {
 
 bool wifiIsApActive() {
   return apActive;
+}
+
+bool wifiIsPermanentApMode() {
+  return wifiMode == WIFI_MODE_AP_PERMANENT;
 }

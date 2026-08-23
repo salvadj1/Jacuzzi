@@ -46,6 +46,13 @@ void storageMoveKnownNetwork(int index, int delta);
 // Elimina todas las redes conocidas guardadas
 void storageClearKnownNetworks();
 
+// ---------------- Modo de conexion WiFi ----------------
+// 0 = usar redes wifi disponibles (AP temporal de 5 min, se cierra al
+//     conectar a una red conocida). 1 = AP permanente (nunca se cierra,
+//     no se intenta conectar a ninguna red domestica).
+void storageLoadWifiMode(int &mode);
+void storageSaveWifiMode(int mode);
+
 // ---------------- Programa de filtracion ----------------
 // Carga el programa guardado en g_state.schedule
 void storageLoadSchedule();

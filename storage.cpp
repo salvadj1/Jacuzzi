@@ -111,6 +111,19 @@ void storageClearKnownNetworks() {
   prefsWifi.end();
 }
 
+// ---------------- Modo de conexion WiFi ----------------
+void storageLoadWifiMode(int &mode) {
+  prefsWifi.begin("wifi", true);
+  mode = prefsWifi.getInt("mode", 0); // 0 = redes disponibles, 1 = AP permanente
+  prefsWifi.end();
+}
+
+void storageSaveWifiMode(int mode) {
+  prefsWifi.begin("wifi", false);
+  prefsWifi.putInt("mode", mode);
+  prefsWifi.end();
+}
+
 // ---------------- Programa de filtracion ----------------
 void storageLoadSchedule() {
   prefsSchedule.begin("schedule", true);
