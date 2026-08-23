@@ -59,3 +59,17 @@ void storageLoadTargetTemp();
 
 // Guarda la temperatura objetivo actual de g_state.targetTemp
 void storageSaveTargetTemp();
+
+// ---------------- Limite de descarga solar ----------------
+// Carga el limite guardado en g_state.solarDischargeTemp
+void storageLoadSolarDischargeTemp();
+
+// Guarda el limite actual de g_state.solarDischargeTemp
+void storageSaveSolarDischargeTemp();
+
+// ---------------- Offset de calibracion de sensores ----------------
+// Carga los offsets guardados en g_state.offsetT1 / g_state.offsetT2
+void storageLoadTempOffsets();
+
+// Guarda los offsets actuales de g_state.offsetT1 / g_state.offsetT2
+void storageSaveTempOffsets();

@@ -13,7 +13,7 @@ esp32_jacuzzi/
 ├── storage.*           -> Guardado persistente (NVS / Preferences)
 ├── wifi_manager.*       -> WiFi: redes conocidas + portal de configuracion
 ├── relays.*             -> Control de bomba y valvulas
-├── temp_sensors.*       -> Lectura de los 2 DS18B20
+├── temp_sensors.*       -> Lectura de los 2 NTC10k (jacuzzi y solar)
 ├── schedule.*            -> Programa horario + logica de modo automatico
 ├── ota.*                 -> Actualizacion de firmware por WiFi
 ├── web_server.*          -> Servidor web + WebSocket
@@ -43,12 +43,18 @@ esp32_jacuzzi/
 |---------------------------------|:---:|
 | NTC T1 (jacuzzi)                | GPIO 32 |
 | NTC T2 (solar)                  | GPIO 33 |
-| Rele 1 - Bomba/Motor            | GPIO 26 |
-| Rele 2 - Valvula V1             | GPIO 27 |
-| Rele 3 - Valvula V2             | GPIO 14 |
-| Rele 4 - Libre / futuro         | GPIO 25 |
+| Rele 1 - Bomba/Motor            | GPIO 4  |
+| Rele 2 - Valvula V1             | GPIO 16 |
+| Rele 3 - Valvula V2             | GPIO 17 |
+| Rele 4 - Libre / futuro         | GPIO 18 |
 | Boton reset WiFi (boton BOOT)   | GPIO 0  |
 | LED de estado (LED azul on-board) | GPIO 2  |
+
+Los reles se colocaron en el lado izquierdo del NodeMCU-32S (GPIO 4,
+16, 17, 18) para acortar el cableado; son pines de salida libres, sin
+conflicto con el flash ni con los NTC (32/33). Si tu modulo lleva
+PSRAM (variante WROVER) no uses 16/17, ya que estan reservados
+internamente; en un NodeMCU-32S normal (WROOM) estan libres.
 
 Si tu modulo de reles es activo en HIGH en vez de en LOW, cambia
 `RELAY_ACTIVE_LOW` a `false` en `config.h`.
@@ -58,6 +64,49 @@ va en un divisor de tension 3.3V — resistencia fija de 10kΩ — NTC — GND,
 y el ESP32 lee el nodo intermedio. GPIO32 y GPIO33 son del ADC1, que a
 diferencia del ADC2 SI es fiable con el WiFi activo, asi que no hay
 ninguna limitacion de hardware que tener en cuenta aqui.
+
+## Logica de control (botones)
+
+Los 4 controles principales de la web son independientes entre si,
+salvo el par forzado que es excluyente:
+
+- **MODO AUTO** (ON/OFF propio): si esta en ON, el programa horario
+  configurado puede mandar sobre bomba y valvulas cuando este dentro
+  de su horario. En OFF, el programa no actua aunque su horario este
+  activo.
+- **BOMBA MANUAL** (ON/OFF propio): fuerza la bomba encendida a mano,
+  independientemente del auto. Util para tener circulacion cuando no
+  hay programa corriendo. La bomba real es la suma logica de ambos:
+  `pumpManual OR (autoEnabled && horario activo)`.
+- **FORZAR SOLAR / FORZAR FILTRO**: selector de 2 posiciones mutuamente
+  excluyentes para las valvulas. Solo tiene efecto cuando el modo auto
+  no esta mandando en ese instante (auto desactivado o fuera de
+  horario); si el auto esta activo y en horario, es `autoHeatingLogic()`
+  (con histeresis, ver `schedule.cpp`) quien decide las valvulas segun
+  temperaturas.
+
+Toda esta logica vive en `schedule.cpp` (`loopSchedule()`,
+`setAutoEnabled()`, `setPumpManual()`, `setForceSolar()`) y en el
+estado de `data.h` (`autoEnabled`, `pumpManual`, `forceSolar`).
+
+## Calibracion y ajustes de temperatura
+
+En el listado de informacion de la web:
+
+- **T1 JACUZZI / T2 SOLAR**: al tocar cada fila se despliega un panel
+  con botones `−`/`+` para aplicar un offset de calibracion a ese
+  sensor (paso 0.5°C, sin limite). El offset se suma a la lectura del
+  NTC correspondiente, se aplica al instante sobre la temperatura ya
+  mostrada (sin esperar al siguiente muestreo) y queda guardado en NVS
+  (persiste tras reiniciar).
+- **TEMP. DESCARGA SOLAR**: valor ajustable (paso 0.5°C) que representa
+  un limite de referencia para el sensor del serpentin. Por ahora es
+  solo informativo: se guarda en NVS pero no afecta a la logica de
+  control.
+
+Todo esto se guarda en el mismo namespace `temp` de `storage.cpp`
+(`storageLoadTempOffsets`/`storageSaveTempOffsets`,
+`storageLoadSolarDischargeTemp`/`storageSaveSolarDischargeTemp`).
 
 ## Conexion WiFi: captive portal bajo demanda
 
@@ -135,4 +184,5 @@ cuando un cliente web se conecta o envia un comando.
   ESP32 (`schedule.cpp`), no en el navegador.
 - La hora se sincroniza por NTP al conectar (ajusta el huso horario en
   la llamada a `configTime()` dentro de `esp32_jacuzzi.ino`), y tambien
-  puede ajustarse manualmente desde el panel de programa de la web.
+  puede ajustarse manualmente desde el panel de programa de la web. La
+  fila "HORA ACTUAL" de la web muestra fecha y hora juntas.

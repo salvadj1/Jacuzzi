@@ -33,16 +33,28 @@ void setValves(bool v1open, bool v2open) {
   }
 }
 
-void setSystemMode(int mode) {
-  g_state.mode = (SystemMode)mode;
-  const char* nombres[] = {"BYPASS", "SOLAR", "AUTO"};
-  Serial.printf("[SCHED] Modo cambiado a %s\n", nombres[g_state.mode]);
-  if (g_state.mode == MODE_SOLAR) {
-    setValves(true, true);
-  } else if (g_state.mode == MODE_BYPASS) {
-    setValves(false, false);
+void setAutoEnabled(bool enabled) {
+  g_state.autoEnabled = enabled;
+  Serial.printf("[SCHED] Modo auto %s\n", enabled ? "ACTIVADO" : "DESACTIVADO");
+  // Si se desactiva el auto, las valvulas pasan a obedecer inmediatamente
+  // al selector manual (forceSolar); lo decide loopSchedule() en el
+  // siguiente ciclo, aqui no forzamos nada mas para no pelear con el bloqueo.
+}
+
+void setPumpManual(bool on) {
+  g_state.pumpManual = on;
+  Serial.printf("[SCHED] Bomba manual %s\n", on ? "ACTIVADA" : "DESACTIVADA");
+}
+
+void setForceSolar(bool solar) {
+  g_state.forceSolar = solar;
+  Serial.printf("[SCHED] Forzado manual de valvulas: %s\n", solar ? "SOLAR" : "FILTRO");
+  // Solo aplicamos ya mismo si el auto no esta mandando en este instante;
+  // si el auto esta activo y en horario, autoHeatingLogic() decide y este
+  // selector queda memorizado para cuando el auto deje de mandar.
+  if (!(g_state.autoEnabled && scheduleIsActiveNow())) {
+    setValves(solar, solar);
   }
-  // En modo AUTO no forzamos nada aqui: lo decide loopSchedule()/autoLogic()
 }
 
 bool scheduleIsActiveNow() {
@@ -84,7 +96,6 @@ time_t scheduleNextStart() {
 // margen amplio y se desactiva con un margen estrecho, para evitar que
 // pequeñas oscilaciones del sensor hagan cambiar las valvulas sin parar.
 static void autoHeatingLogic() {
-  if (g_state.mode != MODE_AUTO) return;
   if (g_state.valvesLocked) return;
 
   bool shouldHeat = g_state.v1open
@@ -101,20 +112,27 @@ void loopSchedule() {
     Serial.println("[SCHED] Valvulas listas, bloqueo liberado");
   }
 
-  // La bomba solo funciona dentro del horario programado
-  bool activeNow = scheduleIsActiveNow();
-  if (activeNow != g_state.pumpOn) {
-    Serial.printf("[SCHED] Bomba %s (%s de horario programado)\n",
-      activeNow ? "ENCENDIDA" : "APAGADA", activeNow ? "dentro" : "fuera");
-  }
-  g_state.pumpOn = activeNow;
-  relayPump(activeNow);
+  // El auto solo manda si esta activado Y estamos dentro de su horario
+  bool autoActiveNow = g_state.autoEnabled && scheduleIsActiveNow();
 
-  if (!activeNow && !g_state.valvesLocked) {
-    // Fuera de horario: valvulas en reposo (recto a filtro, sin retorno solar)
-    if (g_state.v1open || g_state.v2open) setValves(false, false);
-    return;
+  // La bomba real es la suma de "manual" y "auto mandando ahora mismo"
+  bool pumpShouldRun = g_state.pumpManual || autoActiveNow;
+  if (pumpShouldRun != g_state.pumpOn) {
+    Serial.printf("[SCHED] Bomba %s (manual=%s, auto=%s)\n",
+      pumpShouldRun ? "ENCENDIDA" : "APAGADA",
+      g_state.pumpManual ? "ON" : "OFF", autoActiveNow ? "ON" : "OFF");
   }
+  g_state.pumpOn = pumpShouldRun;
+  relayPump(pumpShouldRun);
 
-  autoHeatingLogic();
+  if (g_state.valvesLocked) return;
+
+  if (autoActiveNow) {
+    // El auto manda: decide valvulas por temperatura (con histeresis)
+    autoHeatingLogic();
+  } else {
+    // El auto no manda (desactivado o fuera de horario): las valvulas
+    // obedecen al selector manual forceSolar/forceFilter
+    setValves(g_state.forceSolar, g_state.forceSolar);
+  }
 }

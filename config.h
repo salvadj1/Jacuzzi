@@ -13,10 +13,10 @@
  * Reparto de pines de este proyecto:
  *   - NTC T1 (jacuzzi)              -> GPIO 32 (ADC1_CH4)
  *   - NTC T2 (solar)                -> GPIO 33 (ADC1_CH5)
- *   - Rele 1: Bomba / Motor         -> GPIO 26
- *   - Rele 2: Valvula V1            -> GPIO 27
- *   - Rele 3: Valvula V2            -> GPIO 14
- *   - Rele 4: Libre / futuro uso    -> GPIO 25
+ *   - Rele 1: Bomba / Motor         -> GPIO 4
+ *   - Rele 2: Valvula V1            -> GPIO 16
+ *   - Rele 3: Valvula V2            -> GPIO 17
+ *   - Rele 4: Libre / futuro uso    -> GPIO 18
  *   - Boton fisico reset WiFi       -> GPIO 0  (boton BOOT de la placa,
  *              se lee solo una vez al arrancar, no interfiere con nada mas)
  *   - LED de estado WiFi            -> GPIO 2  (LED azul on-board en la
@@ -40,10 +40,10 @@
 #define NTC_ADC_SAMPLES           16   // Muestras promediadas por lectura (reduce ruido)
 
 // ---------------- Pines del modulo de 4 reles ----------------
-#define PIN_RELAY_MOTOR   26   // Rele 1: bomba/motor de circulacion
-#define PIN_RELAY_V1      27   // Rele 2: valvula V1 (desvio al serpentin solar)
-#define PIN_RELAY_V2      14   // Rele 3: valvula V2 (retorno circuito solar)
-#define PIN_RELAY_SPARE   25   // Rele 4: reservado para uso futuro
+#define PIN_RELAY_MOTOR    4   // Rele 1: bomba/motor de circulacion
+#define PIN_RELAY_V1       16   // Rele 2: valvula V1 (desvio al serpentin solar)
+#define PIN_RELAY_V2       17   // Rele 3: valvula V2 (retorno circuito solar)
+#define PIN_RELAY_SPARE    18   // Rele 4: reservado para uso futuro
 
 // Polaridad del modulo de reles: la mayoria de modulos "chinos" de reles
 // activan el rele cuando el pin se pone en LOW. Cambia a "false" si tu
@@ -63,6 +63,12 @@
 #define TARGET_TEMP_MIN   20.0f
 #define TARGET_TEMP_MAX   40.0f
 #define TARGET_TEMP_STEP   0.1f
+
+// ---------------- Offset de calibracion de sensores NTC ----------------
+#define OFFSET_TEMP_STEP     0.5f
+
+// ---------------- Limite de descarga solar (T2), solo informativo ----------------
+#define SOLAR_DISCHARGE_STEP 0.5f
 
 // ---------------- Tiempos ----------------
 #define VALVE_MOVE_MS      10000   // Tiempo que tardan en girar las valvulas motorizadas

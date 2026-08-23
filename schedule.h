@@ -26,9 +26,20 @@ void loopSchedule();
 // Reutilizable desde el modulo web o desde la logica automatica.
 void setValves(bool v1open, bool v2open);
 
-// Cambia el modo de funcionamiento (bypass/solar/auto) y fuerza el estado
-// de valvulas correspondiente cuando aplica (solar/bypass son manuales).
-void setSystemMode(int mode);
+// Activa/desactiva el modo automatico. En ON, el programa horario puede
+// controlar bomba y valvulas; en OFF, el programa no actua aunque este
+// dentro de su horario.
+void setAutoEnabled(bool enabled);
+
+// Fuerza la bomba encendida/apagada a mano. Se suma (OR) al estado que
+// decida el modo automatico: sirve para tener bomba cuando no hay
+// programa corriendo.
+void setPumpManual(bool on);
+
+// Selector manual de valvulas (mutuamente excluyente: true=SOLAR,
+// false=FILTRO). Solo tiene efecto inmediato en las valvulas cuando el
+// modo automatico no esta mandando en ese momento.
+void setForceSolar(bool solar);
 
 // true si el momento actual (segun RTC del ESP32) cae dentro del programa
 // de filtracion configurado

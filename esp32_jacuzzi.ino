@@ -52,6 +52,8 @@ void setup() {
   storageInit();
   storageLoadSchedule();
   storageLoadTargetTemp();
+  storageLoadTempOffsets();
+  storageLoadSolarDischargeTemp();
   Serial.printf("[MAIN] Programa cargado: %02d:%02d - %02d:%02d\n",
     g_state.schedule.startHour, g_state.schedule.startMinute,
     g_state.schedule.endHour, g_state.schedule.endMinute);

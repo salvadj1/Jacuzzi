@@ -148,3 +148,33 @@ void storageSaveTargetTemp() {
   prefsTemp.putFloat("target", g_state.targetTemp);
   prefsTemp.end();
 }
+
+// ---------------- Offset de calibracion de sensores ----------------
+// Reutiliza el mismo namespace "temp" que la temperatura objetivo.
+void storageLoadTempOffsets() {
+  prefsTemp.begin("temp", true);
+  g_state.offsetT1 = prefsTemp.getFloat("offT1", 0.0f);
+  g_state.offsetT2 = prefsTemp.getFloat("offT2", 0.0f);
+  prefsTemp.end();
+}
+
+void storageSaveTempOffsets() {
+  prefsTemp.begin("temp", false);
+  prefsTemp.putFloat("offT1", g_state.offsetT1);
+  prefsTemp.putFloat("offT2", g_state.offsetT2);
+  prefsTemp.end();
+}
+
+// ---------------- Limite de descarga solar ----------------
+// Reutiliza el mismo namespace "temp".
+void storageLoadSolarDischargeTemp() {
+  prefsTemp.begin("temp", true);
+  g_state.solarDischargeTemp = prefsTemp.getFloat("solarDis", 60.0f);
+  prefsTemp.end();
+}
+
+void storageSaveSolarDischargeTemp() {
+  prefsTemp.begin("temp", false);
+  prefsTemp.putFloat("solarDis", g_state.solarDischargeTemp);
+  prefsTemp.end();
+}

@@ -53,8 +53,8 @@ void loopTempSensors() {
   if (millis() - lastReadMs < SENSOR_READ_MS) return;
   lastReadMs = millis();
 
-  g_state.tJacuzzi = readNtcCelsius(PIN_NTC_T1);
-  g_state.tSolar   = readNtcCelsius(PIN_NTC_T2);
+  g_state.tJacuzzi = readNtcCelsius(PIN_NTC_T1) + g_state.offsetT1;
+  g_state.tSolar   = readNtcCelsius(PIN_NTC_T2) + g_state.offsetT2;
 
   Serial.printf("[TEMP] T1=%.1fC  T2=%.1fC\n", g_state.tJacuzzi, g_state.tSolar);
 }

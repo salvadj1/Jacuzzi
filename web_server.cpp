@@ -27,12 +27,17 @@ static String buildStateJson() {
 
   doc["tJacuzzi"]     = g_state.tJacuzzi;
   doc["tSolar"]       = g_state.tSolar;
+  doc["offsetT1"]     = g_state.offsetT1;
+  doc["offsetT2"]     = g_state.offsetT2;
   doc["pumpOn"]       = g_state.pumpOn;
-  doc["mode"]         = (int)g_state.mode;
+  doc["autoEnabled"]  = g_state.autoEnabled;
+  doc["pumpManual"]   = g_state.pumpManual;
+  doc["forceSolar"]   = g_state.forceSolar;
   doc["v1open"]       = g_state.v1open;
   doc["v2open"]       = g_state.v2open;
   doc["valvesLocked"] = g_state.valvesLocked;
   doc["targetTemp"]   = g_state.targetTemp;
+  doc["solarDischargeTemp"] = g_state.solarDischargeTemp;
 
   time_t now = time(nullptr);
   doc["clock"] = (unsigned long)now;
@@ -64,14 +69,16 @@ static void handleCommand(const String &jsonStr) {
   String cmd = doc["cmd"] | "";
   Serial.printf("[WEB] Comando recibido: %s\n", cmd.c_str());
 
-  if (cmd == "setMode") {
-    int mode = doc["mode"] | 0;
-    Serial.printf("[WEB] Cambiando modo a %d (0=bypass,1=solar,2=auto)\n", mode);
-    setSystemMode(mode);
+  if (cmd == "setAuto") {
+    bool enabled = doc["enabled"] | false;
+    setAutoEnabled(enabled);
 
   } else if (cmd == "togglePump") {
-    g_state.pumpOn = !g_state.pumpOn;
-    Serial.printf("[WEB] Bomba forzada manualmente a %s\n", g_state.pumpOn ? "ON" : "OFF");
+    setPumpManual(!g_state.pumpManual);
+
+  } else if (cmd == "setForceSolar") {
+    bool solar = doc["solar"] | false;
+    setForceSolar(solar);
 
   } else if (cmd == "setTargetTemp") {
     float value = doc["value"] | g_state.targetTemp;
@@ -79,6 +86,24 @@ static void handleCommand(const String &jsonStr) {
     g_state.targetTemp = roundf(value * 10.0f) / 10.0f; // resolucion 0.1
     storageSaveTargetTemp();
     Serial.printf("[WEB] Temperatura objetivo actualizada: %.1f C\n", g_state.targetTemp);
+
+  } else if (cmd == "setTempOffset") {
+    int sensor = doc["sensor"] | 1; // 1 = T1 (jacuzzi), 2 = T2 (solar)
+    float &offset = (sensor == 2) ? g_state.offsetT2 : g_state.offsetT1;
+    float &liveTemp = (sensor == 2) ? g_state.tSolar : g_state.tJacuzzi;
+    float value = doc["value"] | offset;
+    value = roundf(value / OFFSET_TEMP_STEP) * OFFSET_TEMP_STEP; // resolucion 0.5, sin limite
+    float delta = value - offset;
+    offset = value;
+    liveTemp += delta; // aplica el cambio ya mismo, sin esperar al siguiente muestreo
+    storageSaveTempOffsets();
+    Serial.printf("[WEB] Offset T%d actualizado: %.1f C\n", sensor, offset);
+
+  } else if (cmd == "setSolarDischargeTemp") {
+    float value = doc["value"] | g_state.solarDischargeTemp;
+    g_state.solarDischargeTemp = roundf(value / SOLAR_DISCHARGE_STEP) * SOLAR_DISCHARGE_STEP; // resolucion 0.5, solo informativo
+    storageSaveSolarDischargeTemp();
+    Serial.printf("[WEB] Limite descarga solar actualizado: %.1f C\n", g_state.solarDischargeTemp);
 
   } else if (cmd == "setSchedule") {
     g_state.schedule.startHour   = doc["startHour"]   | g_state.schedule.startHour;
