@@ -312,13 +312,18 @@ static void registerCaptiveRoutes() {
     ESP.restart();
   });
 
-  // Acceso directo al portal de configuracion, util cuando la raiz "/"
-  // esta sirviendo la app de control (modo AP permanente) o cuando se
-  // navega desde la red domestica tras activar el AP bajo demanda.
+
+   // Acceso directo al portal de configuracion. Exige estar conectado al
+  // propio AP (no basta con que el AP este activo): evita que un
+  // dispositivo de la red domestica gestione las redes guardadas.
   server.on("/wifi-config", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (!apActive) { request->send(404); return; }
+    if (!wifiRequestIsFromAp(request)) { request->send(404); return; }
     wifiSendConfigPage(request);
   });
+ /*server.on("/wifi-config", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!apActive) { request->send(404); return; }
+    wifiSendConfigPage(request);
+  });*/
 
   // Cualquier otra ruta no reconocida QUE LLEGUE POR EL AP: sirve la
   // pagina de configuracion (esto es lo que dispara la deteccion
@@ -422,8 +427,22 @@ void wifiActivateConfigAp() {
   startConfigPortal();
 }
 
-bool wifiRequestIsFromAp(AsyncWebServerRequest *request) {
+/*bool wifiRequestIsFromAp(AsyncWebServerRequest *request) {
   return apActive && request->client()->localIP() == WiFi.softAPIP();
+}*/
+
+bool wifiRequestIsFromAp(AsyncWebServerRequest *request) {
+    if (!apActive) return false;
+    // Comparamos la IP remota del cliente contra la subred del AP en vez
+    // de confiar en localIP() del socket, que en modo AP+STA no siempre
+    // refleja la interfaz real por la que llego la peticion.
+    IPAddress remoteIP = request->client()->remoteIP();
+    IPAddress apIP = WiFi.softAPIP();
+    IPAddress mask = WiFi.softAPSubnetMask();
+    for (int i = 0; i < 4; i++) {
+        if ((remoteIP[i] & mask[i]) != (apIP[i] & mask[i])) return false;
+    }
+    return true;
 }
 
 void wifiSendConfigPage(AsyncWebServerRequest *request) {

@@ -494,7 +494,14 @@ el('btnForceBypass').onclick = ()=> sendCmd({ cmd:'setForceSolar', solar:false }
 // reiniciando) se hace en la propia pagina del captive portal.
 el('btnWifi').onclick = ()=>{
   sendCmd({ cmd:'activateWifiAp' });
-  el('resetOverlay').classList.add('open');
+  // Si ya estamos viendo la pagina desde el propio AP, vamos directos
+  // al portal; si estamos en la red domestica, hay que avisar al
+  // usuario para que cambie de red manualmente (no se puede hacer desde JS).
+  if (location.hostname === '192.168.4.1') {
+    location.href = 'http://192.168.4.1/wifi-config';
+  } else {
+    el('resetOverlay').classList.add('open');
+  }
 };
 
 el('btnResetCancelar').onclick = ()=>{
