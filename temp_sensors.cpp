@@ -17,6 +17,21 @@
 
 static unsigned long lastReadMs = 0;
 
+// Media movil para suavizar oscilaciones de temperatura mostrada
+#define TEMP_AVG_SAMPLES 10
+static float t1Buf[TEMP_AVG_SAMPLES] = {0};
+static float t2Buf[TEMP_AVG_SAMPLES] = {0};
+static uint8_t avgIdx = 0;
+static bool avgFilled = false;
+
+static float pushAndAverage(float *buf, float newVal) {
+  buf[avgIdx] = newVal;
+  uint8_t count = avgFilled ? TEMP_AVG_SAMPLES : (avgIdx + 1);
+  float sum = 0;
+  for (uint8_t i = 0; i < count; i++) sum += buf[i];
+  return sum / count;
+}
+
 void setupTempSensors() {
   analogSetAttenuation(ADC_11db);      // permite leer hasta ~3.3V en el ADC
   analogReadResolution(12);            // 0-4095
@@ -36,10 +51,8 @@ float readNtcCelsius(uint8_t pin) {
   float vNode = (adcAvg / 4095.0f) * 3.3f;
 
   // Resistencia del NTC a partir del divisor de tension:
-  //   vNode = 3.3 * R_ntc / (R_ntc + R_serie)   =>   R_ntc = R_serie * vNode / (3.3 - vNode)
-  // (Si tu NTC esta conectado arriba y la resistencia fija abajo, usa:
-  //  R_ntc = R_serie * (3.3 - vNode) / vNode )
-  float rNtc = NTC_SERIES_OHM * vNode / (3.3f - vNode);
+  // NTC arriba (3.3V->NTC->nodo ADC->R_serie->GND):
+  float rNtc = NTC_SERIES_OHM * (3.3f - vNode) / vNode;
 
   // Ecuacion Beta: 1/T = 1/T0 + (1/B) * ln(R/R0)
   float t0Kelvin = NTC_NOMINAL_TEMP_C + 273.15f;
@@ -53,8 +66,14 @@ void loopTempSensors() {
   if (millis() - lastReadMs < SENSOR_READ_MS) return;
   lastReadMs = millis();
 
-  g_state.tJacuzzi = readNtcCelsius(PIN_NTC_T1) + g_state.offsetT1;
-  g_state.tSolar   = readNtcCelsius(PIN_NTC_T2) + g_state.offsetT2;
+  float rawT1 = readNtcCelsius(PIN_NTC_T1) + g_state.offsetT1;
+  float rawT2 = readNtcCelsius(PIN_NTC_T2) + g_state.offsetT2;
+
+  g_state.tJacuzzi = pushAndAverage(t1Buf, rawT1);
+  g_state.tSolar   = pushAndAverage(t2Buf, rawT2);
+
+  avgIdx = (avgIdx + 1) % TEMP_AVG_SAMPLES;
+  if (avgIdx == 0) avgFilled = true;
 
   Serial.printf("[TEMP] T1=%.1fC  T2=%.1fC\n", g_state.tJacuzzi, g_state.tSolar);
 }

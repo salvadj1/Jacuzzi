@@ -13,6 +13,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Control Jacuzzi ESP32</title>
 <style>
 :root{
@@ -384,7 +385,10 @@ function renderSchedule(){
   if(!state) return;
   const s = state.schedule;
 
-  el('statClock').textContent = estimatedNow().toLocaleTimeString('es-ES');
+  {
+    const now = estimatedNow();
+    el('statClock').textContent = now.toLocaleTimeString('es-ES') + ' - ' + now.toLocaleDateString('es-ES');
+  }
   const diasTxt = s.days.map((on,i)=> on ? DIAS_LBL[i] : null).filter(Boolean).join(' ');
   el('progText').textContent =
     `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)} · ${diasTxt}`;

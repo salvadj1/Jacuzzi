@@ -40,10 +40,10 @@
 #define NTC_ADC_SAMPLES           16   // Muestras promediadas por lectura (reduce ruido)
 
 // ---------------- Pines del modulo de 4 reles ----------------
-#define PIN_RELAY_MOTOR   26   // Rele 1: bomba/motor de circulacion
-#define PIN_RELAY_V1      27   // Rele 2: valvula V1 (desvio al serpentin solar)
-#define PIN_RELAY_V2      14   // Rele 3: valvula V2 (retorno circuito solar)
-#define PIN_RELAY_SPARE   25   // Rele 4: reservado para uso futuro
+#define PIN_RELAY_MOTOR   4   // Rele 1: bomba/motor de circulacion
+#define PIN_RELAY_V1      16   // Rele 2: valvula V1 (desvio al serpentin solar)
+#define PIN_RELAY_V2      17   // Rele 3: valvula V2 (retorno circuito solar)
+#define PIN_RELAY_SPARE   18   // Rele 4: reservado para uso futuro
 
 // Polaridad del modulo de reles: la mayoria de modulos "chinos" de reles
 // activan el rele cuando el pin se pone en LOW. Cambia a "false" si tu
