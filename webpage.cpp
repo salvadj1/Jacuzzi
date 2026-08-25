@@ -28,17 +28,17 @@ h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;m
 .wrap{max-width:560px;margin:0 auto;}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:8px;}
 svg{width:100%;height:auto;display:block;}
-.minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:14px 16px;}
-.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
-.tcard{background:#101a17;border:1px solid var(--line);border-radius:6px;padding:12px;text-align:center;cursor:default;}
+.minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:16px 18px;}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;}
+.tcard{background:transparent;border:none;border-bottom:2px solid var(--amber);padding:10px 4px;text-align:left;cursor:default;}
 .tcard.clickable{cursor:pointer;}
-.tcard-lbl{color:var(--dim);font-size:12px;letter-spacing:.5px;}
-.tcard-val{display:block;color:var(--text);font-size:26px;font-weight:bold;margin-top:4px;}
-.minibox .row{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;line-height:26px;color:var(--dim);letter-spacing:.3px;padding:8px 0;border-bottom:1px solid #1b2622;}
+.tcard-lbl{color:#ffffff;font-size:15px;font-weight:900;letter-spacing:.4px;}
+.tcard-val{display:block;color:var(--amber);font-size:30px;font-weight:900;margin-top:2px;}
+.minibox .row{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;padding:10px 0;border-bottom:1px solid #223229;}
 .minibox .row:last-child{border-bottom:none;}
-.minibox .row b{color:var(--text);font-weight:bold;font-size:15px;}
-.minibox .row.mode{font-size:16px;}
-.minibox .row.mode b{color:var(--green);font-size:17px;}
+.minibox .row .lbl{color:#ffffff;font-weight:900;font-size:14px;letter-spacing:.4px;}
+.minibox .row b{color:#7fe8ff;font-weight:900;font-size:15px;}
+.minibox .row.mode b{color:var(--green);font-size:16px;}
 .pipe{fill:none;stroke:var(--pipe);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .pipe-inner{fill:none;stroke:#000;stroke-opacity:0.25;stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .flow{fill:none;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 10;opacity:0;transition:opacity .4s;}
@@ -62,7 +62,7 @@ svg{width:100%;height:auto;display:block;}
 .badge{font-size:10px;letter-spacing:1px;}
 .minibox .row.clickable{cursor:pointer;}
 .minibox .row.clickable:hover b{color:var(--amber);}
-.minibox .row .hint{font-size:10px;color:var(--dim);}
+.gear-icon{width:14px;height:14px;vertical-align:middle;margin-left:6px;opacity:.7;}
 .tcard.clickable:hover .tcard-lbl{color:var(--amber);}
 .temp-ctrl{display:flex;align-items:center;gap:8px;}
 .temp-ctrl button{padding:2px 10px;font-size:14px;line-height:1;}
@@ -133,10 +133,10 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   </div>
 </div>
 <div class="panel">
-<svg viewBox="0 0 560 830" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 560 885" xmlns="http://www.w3.org/2000/svg">
 
   <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
-  <foreignObject x="10" y="0" width="540" height="480">
+  <foreignObject x="10" y="0" width="540" height="535">
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox">
 
       <div class="cards">
@@ -157,7 +157,9 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
 
       <div class="row clickable" id="clockRow">
-        HORA ACTUAL<span class="hint">(toca para ajustar)</span><b id="statClock">—</b>
+        <span class="lbl">HORA ACTUAL
+          <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </span><b id="statClock">—</b>
       </div>
       <div class="progedit" id="clockEdit">
         <div class="fila">
@@ -168,7 +170,9 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
 
       <div class="row clickable" id="progRow">
-        PROGRAMA<span class="hint">(toca para ajustar)</span><b id="progText">—</b>
+        <span class="lbl">PROGRAMA
+          <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </span><b id="progText">—</b>
       </div>
       <div class="progedit" id="progEdit">
         <div class="fila">
@@ -179,9 +183,9 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         <button class="guardar" id="progGuardar">GUARDAR</button>
       </div>
 
-      <div class="row">SIGUIENTE PROGRAMA<b id="nextProgText">—</b></div>
+      <div class="row"><span class="lbl">SIGUIENTE PROGRAMA</span><b id="nextProgText">—</b></div>
 
-      <div class="row">TEMP. OBJETIVO
+      <div class="row"><span class="lbl">TEMP. OBJETIVO</span>
         <div class="temp-ctrl">
           <button id="tempDown">−</button>
           <b id="tempSetVal">—</b>
@@ -189,7 +193,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
-      <div class="row">TEMP. DESCARGA SOLAR
+      <div class="row"><span class="lbl">TEMP. DESCARGA SOLAR</span>
         <div class="temp-ctrl">
           <button id="solarDisDown">−</button>
           <b id="solarDisVal">—</b>
@@ -197,14 +201,14 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
-      <div class="row mode">MODO<b id="modeText">—</b></div>
-      <div class="row">V1<b id="statV1">—</b></div>
-      <div class="row">V2<b id="statV2">—</b></div>
-      <div class="row">BOMBA<b id="statPump">—</b></div>
+      <div class="row mode"><span class="lbl">MODO</span><b id="modeText">—</b></div>
+      <div class="row"><span class="lbl">V1</span><b id="statV1">—</b></div>
+      <div class="row"><span class="lbl">V2</span><b id="statV2">—</b></div>
+      <div class="row"><span class="lbl">BOMBA</span><b id="statPump">—</b></div>
     </div>
   </foreignObject>
 
-<g transform="translate(-20,110) scale(1.08)">
+<g transform="translate(-20,165) scale(1.08)">
 
   <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
   <path class="pipe" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486 L 512,570"/>
@@ -389,8 +393,8 @@ function render(){
   // btnForceSolar/btnForceBypass son mutuamente excluyentes entre si.
   el('btnAuto').classList.toggle('active', state.autoEnabled);
   el('btnPump').classList.toggle('active', state.pumpManual);
-  el('btnForceSolar').classList.toggle('active', state.forceSolar);
-  el('btnForceBypass').classList.toggle('active', !state.forceSolar);
+  el('btnForceSolar').classList.toggle('active', state.valvulasActivas);
+  el('btnForceBypass').classList.toggle('active', !state.valvulasActivas);
 
   const locked = state.valvesLocked;
   ['btnForceSolar','btnForceBypass'].forEach(id => el(id).disabled = locked);
