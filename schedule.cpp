@@ -17,19 +17,17 @@ void setupSchedule() {
   g_state.valveLockUntil = 0;
 }
 
-void setValves(bool v1open, bool v2open) {
-  bool changed = (v1open != g_state.v1open) || (v2open != g_state.v2open);
-  g_state.v1open = v1open;
-  g_state.v2open = v2open;
+void setValves(bool activo) {
+  bool changed = (activo != g_state.valvulasActivas);
+  g_state.valvulasActivas = activo;
 
-  relayValve1(v1open);
-  relayValve2(v2open);
+  relayValves(activo);
 
   if (changed) {
     g_state.valvesLocked = true;
     g_state.valveLockUntil = millis() + VALVE_MOVE_MS;
-    Serial.printf("[SCHED] Valvulas cambiando: V1=%s V2=%s (bloqueadas %lus)\n",
-      v1open ? "ABIERTA" : "CERRADA", v2open ? "ABIERTA" : "CERRADA", VALVE_MOVE_MS/1000);
+    Serial.printf("[SCHED] Valvulas cambiando: %s (bloqueadas %lus)\n",
+      activo ? "DESVIO SOLAR" : "REPOSO/FILTRO", VALVE_MOVE_MS/1000);
   }
 }
 
@@ -53,7 +51,7 @@ void setForceSolar(bool solar) {
   // si el auto esta activo y en horario, autoHeatingLogic() decide y este
   // selector queda memorizado para cuando el auto deje de mandar.
   if (!(g_state.autoEnabled && scheduleIsActiveNow())) {
-    setValves(solar, solar);
+    setValves(solar);
   }
 }
 
@@ -61,13 +59,26 @@ bool scheduleIsActiveNow() {
   struct tm timeInfo;
   if (!getLocalTime(&timeInfo, 50)) return false; // hora aun no sincronizada
 
-  if (!g_state.schedule.days[timeInfo.tm_wday]) return false;
-
   int nowMinutes   = timeInfo.tm_hour * 60 + timeInfo.tm_min;
   int startMinutes = g_state.schedule.startHour * 60 + g_state.schedule.startMinute;
   int endMinutes   = g_state.schedule.endHour * 60 + g_state.schedule.endMinute;
 
-  return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  if (startMinutes <= endMinutes) {
+    // Franja normal, dentro del mismo dia (ej. 08:00 - 18:00)
+    if (!g_state.schedule.days[timeInfo.tm_wday]) return false;
+    return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  }
+
+  // Franja que cruza medianoche (ej. 22:39 - 18:00 del dia siguiente):
+  // esta activa desde el inicio hasta medianoche, y desde medianoche
+  // hasta el fin. El dia marcado corresponde al dia de INICIO.
+  bool afterMidnightPart = nowMinutes < endMinutes;
+  int  wdayToCheck = afterMidnightPart
+    ? (timeInfo.tm_wday + 6) % 7   // venimos del dia anterior (el de inicio)
+    : timeInfo.tm_wday;
+  if (!g_state.schedule.days[wdayToCheck]) return false;
+
+  return nowMinutes >= startMinutes || afterMidnightPart;
 }
 
 time_t scheduleNextStart() {
@@ -102,7 +113,7 @@ static void autoHeatingLogic() {
   // Temperatura ya alcanzada: no hace falta descargar, valvulas a filtro.
   if (g_state.tJacuzzi >= g_state.targetTemp) {
     g_state.dischargeActive = false;
-    setValves(false, false);
+    setValves(false);
     return;
   }
 
@@ -111,7 +122,7 @@ static void autoHeatingLogic() {
     if (millis() >= g_state.dischargeUntil) {
       g_state.dischargeActive = false;
       Serial.println("[SCHED] Descarga de serpentin completada (5 min)");
-      setValves(false, false);
+      setValves(false);
     }
     // Si aun no ha pasado el tiempo, se deja tal cual (valvulas ya abiertas).
     return;
@@ -122,9 +133,9 @@ static void autoHeatingLogic() {
     g_state.dischargeActive  = true;
     g_state.dischargeUntil   = millis() + DISCHARGE_DURATION_MS;
     Serial.println("[SCHED] Iniciando descarga de serpentin (5 min)");
-    setValves(true, true);
+    setValves(true);
   } else {
-    setValves(false, false);
+    setValves(false);
   }
 }
 
@@ -156,6 +167,6 @@ void loopSchedule() {
   } else {
     // El auto no manda (desactivado o fuera de horario): las valvulas
     // obedecen al selector manual forceSolar/forceFilter
-    setValves(g_state.forceSolar, g_state.forceSolar);
+    setValves(g_state.forceSolar);
   }
 }

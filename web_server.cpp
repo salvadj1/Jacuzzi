@@ -33,8 +33,7 @@ static String buildStateJson() {
   doc["autoEnabled"]  = g_state.autoEnabled;
   doc["pumpManual"]   = g_state.pumpManual;
   doc["forceSolar"]   = g_state.forceSolar;
-  doc["v1open"]       = g_state.v1open;
-  doc["v2open"]       = g_state.v2open;
+  doc["valvulasActivas"] = g_state.valvulasActivas;
   doc["valvesLocked"] = g_state.valvesLocked;
   doc["targetTemp"]   = g_state.targetTemp;
   doc["solarDischargeTemp"] = g_state.solarDischargeTemp;

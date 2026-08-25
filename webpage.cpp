@@ -13,7 +13,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Control Jacuzzi ESP32</title>
 <style>
 :root{
@@ -66,9 +66,9 @@ svg{width:100%;height:auto;display:block;}
 .tcard.clickable:hover .tcard-lbl{color:var(--amber);}
 .temp-ctrl{display:flex;align-items:center;gap:8px;}
 .temp-ctrl button{padding:2px 10px;font-size:14px;line-height:1;}
-.offset-ctrl{display:none;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--dim);margin-top:10px;padding-top:10px;border-top:1px solid var(--line);}
+.offset-ctrl{display:none;align-items:center;justify-content:center;gap:16px;font-size:12px;color:var(--dim);margin-top:10px;padding-top:10px;border-top:1px solid var(--line);}
 .offset-ctrl.open{display:flex;}
-.offset-ctrl button{padding:1px 9px;font-size:13px;line-height:1;}
+.offset-ctrl button{padding:6px 16px;font-size:16px;line-height:1;}
 .offset-ctrl b{color:var(--text);}
 .progedit{display:none;flex-direction:column;gap:8px;background:#0a100e;border:1px solid var(--line);border-radius:5px;padding:10px;margin:4px 0 2px 0;font-size:12px;}
 .progedit.open{display:flex;}
@@ -101,7 +101,7 @@ svg{width:100%;height:auto;display:block;}
 .dot.g{background:var(--green);box-shadow:0 0 6px var(--green);}
 .dot.r{background:var(--red);}
 .controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
-button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:8px 4px;font-family:var(--mono);font-size:11px;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
+button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font-family:var(--mono);font-size:10px;letter-spacing:.3px;line-height:1;cursor:pointer;white-space:nowrap;}
 button:hover{border-color:var(--amber);color:var(--amber);}
 button.active{border-color:var(--green);color:var(--green);}
 button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);}
@@ -133,10 +133,10 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   </div>
 </div>
 <div class="panel">
-<svg viewBox="0 0 560 730" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 560 830" xmlns="http://www.w3.org/2000/svg">
 
   <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
-  <foreignObject x="10" y="0" width="540" height="430">
+  <foreignObject x="10" y="0" width="540" height="480">
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox">
 
       <div class="cards">
@@ -161,7 +161,8 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
       <div class="progedit" id="clockEdit">
         <div class="fila">
-          Ajustar reloj ESP32 <input type="time" id="clockSet" step="1">
+          Fecha <input type="date" id="clockSetDate">
+          Hora <input type="time" id="clockSet" step="1">
         </div>
         <button class="guardar" id="clockGuardar">GUARDAR</button>
       </div>
@@ -203,7 +204,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     </div>
   </foreignObject>
 
-<g transform="translate(-20,10) scale(1.08)">
+<g transform="translate(-20,110) scale(1.08)">
 
   <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
   <path class="pipe" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486 L 512,570"/>
@@ -352,16 +353,16 @@ function render(){
   el('offT1Val').textContent = (state.offsetT1>=0?'+':'')+state.offsetT1.toFixed(1)+' °C';
   el('offT2Val').textContent = (state.offsetT2>=0?'+':'')+state.offsetT2.toFixed(1)+' °C';
   el('statPump').textContent = state.pumpOn ? 'ON' : 'OFF';
-  el('statV1').textContent = state.v1open ? 'DESVÍA (SERPENTÍN)' : 'RECTO (FILTRO)';
-  el('statV2').textContent = state.v2open ? 'ABIERTA (RETORNO)' : 'CERRADA';
+  el('statV1').textContent = state.valvulasActivas ? 'DESVÍA (SERPENTÍN)' : 'RECTO (FILTRO)';
+  el('statV2').textContent = state.valvulasActivas ? 'ABIERTA (RETORNO)' : 'CERRADA';
 
-  applyValve('valve1', !state.v1open);
-  applyValve('valve2', state.v2open);
+  applyValve('valve1', !state.valvulasActivas);
+  applyValve('valve2', state.valvulasActivas);
 
   el('pumpBlade').classList.toggle('on', state.pumpOn);
 
-  const solarActive  = state.pumpOn && state.v1open && state.v2open;
-  const filterActive = state.pumpOn && !state.v1open;
+  const solarActive  = state.pumpOn && state.valvulasActivas;
+  const filterActive = state.pumpOn && !state.valvulasActivas;
 
   el('flowToPump').classList.toggle('on', state.pumpOn);
   el('flowPumpToV1').classList.toggle('on', state.pumpOn);
@@ -449,15 +450,17 @@ el('clockRow').onclick = ()=>{
   el('progEdit').classList.remove('open'); // no dejar los dos paneles abiertos a la vez
   const open = el('clockEdit').classList.toggle('open');
   if(open){
-    el('clockSet').value = estimatedNow().toTimeString().slice(0,8);
+    const now = estimatedNow();
+    el('clockSet').value = now.toTimeString().slice(0,8);
+    el('clockSetDate').value = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}`;
   }
 };
 
 el('clockGuardar').onclick = ()=>{
-  if(!el('clockSet').value) return;
+  if(!el('clockSet').value || !el('clockSetDate').value) return;
   const [h,m,s] = el('clockSet').value.split(':').map(Number);
-  const d = estimatedNow();
-  d.setHours(h,m,s||0,0);
+  const [y,mo,da] = el('clockSetDate').value.split('-').map(Number);
+  const d = new Date(y, mo-1, da, h, m, s||0, 0);
   sendCmd({ cmd:'setClock', epoch: Math.floor(d.getTime()/1000) });
   el('clockEdit').classList.remove('open');
 };
@@ -513,6 +516,8 @@ function toggleOffsetPanel(panelId, otherPanelId){
 }
 el('rowT1').onclick = ()=> toggleOffsetPanel('offsetT1Ctrl','offsetT2Ctrl');
 el('rowT2').onclick = ()=> toggleOffsetPanel('offsetT2Ctrl','offsetT1Ctrl');
+el('offsetT1Ctrl').onclick = (e)=> e.stopPropagation();
+el('offsetT2Ctrl').onclick = (e)=> e.stopPropagation();
 
 el('offT1Up').onclick   = ()=>{ if(state) sendCmd({ cmd:'setTempOffset', sensor:1, value: +(state.offsetT1+0.5).toFixed(1) }); };
 el('offT1Down').onclick = ()=>{ if(state) sendCmd({ cmd:'setTempOffset', sensor:1, value: +(state.offsetT1-0.5).toFixed(1) }); };

@@ -1,7 +1,7 @@
 /*
  * relays.h
  * -----------------------------------------------------------------------
- * Modulo de control del modulo de 4 reles (bomba, valvula V1, valvula V2
+ * Modulo de control del modulo de 4 reles (bomba, rele de ambas valvulas
  * y un rele de repuesto). Funciones sueltas y reutilizables: pueden
  * copiarse a cualquier otro proyecto que use un modulo de reles similar.
  * -----------------------------------------------------------------------
@@ -17,13 +17,12 @@ void setupRelays();
 // configurada en RELAY_ACTIVE_LOW.
 void relayPump(bool on);
 
-// Abre/cierra la valvula V1 (false = recto a filtro, true = desvia a
-// serpentin solar). Internamente activa el rele el tiempo justo o lo deja
-// activo segun el tipo de valvula (ver comentario en relays.cpp).
-void relayValve1(bool open);
-
-// Abre/cierra la valvula V2 (retorno del circuito solar)
-void relayValve2(bool open);
+// Activa/desactiva el rele que mueve las dos valvulas a la vez. Al estar
+// una en Normalmente Abierta y la otra en Normalmente Cerrada, un unico
+// rele basta para dejarlas siempre en posiciones opuestas:
+//   false = reposo (filtro directo)
+//   true  = activado (desvio al serpentin solar)
+void relayValves(bool activo);
 
 // Activa/desactiva el rele de repuesto (uso futuro)
 void relaySpare(bool on);

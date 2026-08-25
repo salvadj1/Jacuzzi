@@ -22,14 +22,12 @@ static inline void writeRelay(uint8_t pin, bool logicalOn) {
 
 void setupRelays() {
   pinMode(PIN_RELAY_MOTOR, OUTPUT);
-  pinMode(PIN_RELAY_V1, OUTPUT);
-  pinMode(PIN_RELAY_V2, OUTPUT);
+  pinMode(PIN_DE_AMBAS_VALVULAS, OUTPUT);
   pinMode(PIN_RELAY_SPARE, OUTPUT);
 
   // Todos apagados al arrancar, por seguridad
   writeRelay(PIN_RELAY_MOTOR, false);
-  writeRelay(PIN_RELAY_V1, false);
-  writeRelay(PIN_RELAY_V2, false);
+  writeRelay(PIN_DE_AMBAS_VALVULAS, false);
   writeRelay(PIN_RELAY_SPARE, false);
 
   Serial.println("[RELAYS] Reles inicializados (todos apagados)");
@@ -39,12 +37,8 @@ void relayPump(bool on) {
   writeRelay(PIN_RELAY_MOTOR, on);
 }
 
-void relayValve1(bool open) {
-  writeRelay(PIN_RELAY_V1, open);
-}
-
-void relayValve2(bool open) {
-  writeRelay(PIN_RELAY_V2, open);
+void relayValves(bool activo) {
+  writeRelay(PIN_DE_AMBAS_VALVULAS, activo);
 }
 
 void relaySpare(bool on) {

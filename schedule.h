@@ -22,9 +22,9 @@ void setupSchedule();
 void loopSchedule();
 
 // Cambia el estado deseado de las valvulas de forma segura: si hay un
-// cambio real, aplica los reles y activa el bloqueo temporal de VALVE_MOVE_MS.
+// cambio real, aplica el rele y activa el bloqueo temporal de VALVE_MOVE_MS.
 // Reutilizable desde el modulo web o desde la logica automatica.
-void setValves(bool v1open, bool v2open);
+void setValves(bool activo);
 
 // Activa/desactiva el modo automatico. En ON, el programa horario puede
 // controlar bomba y valvulas; en OFF, el programa no actua aunque este

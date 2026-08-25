@@ -25,8 +25,7 @@ struct SystemState {
   float offsetT1   = 0.0f;   // Offset de calibracion sumado a la lectura cruda de T1
   float offsetT2   = 0.0f;   // Offset de calibracion sumado a la lectura cruda de T2
   bool  pumpOn     = false;  // Estado real (resultante) de la bomba
-  bool v1open      = false;  // false = recto a filtro | true = desvia a serpentin
-  bool v2open      = false;  // false = cerrada        | true = abierta (retorno solar)
+  bool valvulasActivas = false; // false = reposo (filtro directo) | true = desvio al serpentin solar
 
   // --- Interruptores independientes de control (nueva logica de botones) ---
   bool autoEnabled = false;  // ON = el programa horario puede mandar; OFF = el programa no actua aunque este en horario
