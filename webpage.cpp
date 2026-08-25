@@ -19,7 +19,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 :root{
   --bg:#0b1210; --panel:#101a17; --line:#22332c; --steel:#3a4a44;
   --pipe:#2b3b36; --water:#2fa6c9; --water-hot:#e0672e;
-  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --text:#d8e2dd; --dim:#6f8177;
+  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --text:#d8e2dd; --dim:#9db3a6;
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}
@@ -133,7 +133,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   </div>
 </div>
 <div class="panel">
-<svg viewBox="0 0 560 1025" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 560 730" xmlns="http://www.w3.org/2000/svg">
 
   <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
   <foreignObject x="10" y="0" width="540" height="430">
@@ -156,7 +156,15 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
-      <div class="row">HORA ACTUAL<b id="statClock">—</b></div>
+      <div class="row clickable" id="clockRow">
+        HORA ACTUAL<span class="hint">(toca para ajustar)</span><b id="statClock">—</b>
+      </div>
+      <div class="progedit" id="clockEdit">
+        <div class="fila">
+          Ajustar reloj ESP32 <input type="time" id="clockSet" step="1">
+        </div>
+        <button class="guardar" id="clockGuardar">GUARDAR</button>
+      </div>
 
       <div class="row clickable" id="progRow">
         PROGRAMA<span class="hint">(toca para ajustar)</span><b id="progText">—</b>
@@ -167,9 +175,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
           Fin <input type="time" id="progEnd">
         </div>
         <div class="fila dias" id="progDias"></div>
-        <div class="fila">
-          Ajustar reloj ESP32 <input type="time" id="clockSet" step="1">
-        </div>
         <button class="guardar" id="progGuardar">GUARDAR</button>
       </div>
 
@@ -198,7 +203,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     </div>
   </foreignObject>
 
-<g transform="translate(0,315)">
+<g transform="translate(-20,10) scale(1.08)">
 
   <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
   <path class="pipe" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486 L 512,570"/>
@@ -439,14 +444,32 @@ function buildDiasPicker(){
   });
 }
 
+el('clockRow').onclick = ()=>{
+  if(!state) return;
+  el('progEdit').classList.remove('open'); // no dejar los dos paneles abiertos a la vez
+  const open = el('clockEdit').classList.toggle('open');
+  if(open){
+    el('clockSet').value = estimatedNow().toTimeString().slice(0,8);
+  }
+};
+
+el('clockGuardar').onclick = ()=>{
+  if(!el('clockSet').value) return;
+  const [h,m,s] = el('clockSet').value.split(':').map(Number);
+  const d = estimatedNow();
+  d.setHours(h,m,s||0,0);
+  sendCmd({ cmd:'setClock', epoch: Math.floor(d.getTime()/1000) });
+  el('clockEdit').classList.remove('open');
+};
+
 el('progRow').onclick = ()=>{
   if(!state) return;
+  el('clockEdit').classList.remove('open'); // no dejar los dos paneles abiertos a la vez
   const open = el('progEdit').classList.toggle('open');
   if(open){
     const s = state.schedule;
     el('progStart').value = `${pad2(s.startHour)}:${pad2(s.startMinute)}`;
     el('progEnd').value   = `${pad2(s.endHour)}:${pad2(s.endMinute)}`;
-    el('clockSet').value  = estimatedNow().toTimeString().slice(0,8);
     editDays = s.days.slice();
     buildDiasPicker();
   }
@@ -457,13 +480,6 @@ el('progGuardar').onclick = ()=>{
   const [eh, em] = el('progEnd').value.split(':').map(Number);
 
   sendCmd({ cmd:'setSchedule', startHour:sh, startMinute:sm, endHour:eh, endMinute:em, days:editDays });
-
-  if(el('clockSet').value){
-    const [h,m,s] = el('clockSet').value.split(':').map(Number);
-    const d = estimatedNow();
-    d.setHours(h,m,s||0,0);
-    sendCmd({ cmd:'setClock', epoch: Math.floor(d.getTime()/1000) });
-  }
   el('progEdit').classList.remove('open');
 };
 
