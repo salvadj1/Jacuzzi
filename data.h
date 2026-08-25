@@ -34,7 +34,11 @@ struct SystemState {
   bool forceSolar  = false;  // Selector manual de valvulas cuando no manda el auto: true=SOLAR, false=FILTRO
 
   float targetTemp = 36.0f;  // Temperatura deseada por el usuario
-  float solarDischargeTemp = 60.0f; // Limite de temperatura del serpentin solar (T2), solo informativo/guardado
+  float solarDischargeTemp = 60.0f; // Umbral de T2 para permitir la descarga del serpentin
+
+  // --- Logica de descarga del serpentin (modo automatico) ---
+  bool dischargeActive        = false; // true mientras se esta forzando solar para descargar el serpentin
+  unsigned long dischargeUntil = 0;    // millis() en el que termina la ventana de descarga de 5 min
   ScheduleProgram schedule;  // Programa de filtracion configurado
 
   bool valvesLocked = false; // true mientras las valvulas estan girando (bloquea comandos)

@@ -23,16 +23,22 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:20px;}
-h1{font-size:15px;letter-spacing:3px;color:var(--dim);text-transform:uppercase;margin:0 0 14px 4px;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:14px;}
+h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;}
 .wrap{max-width:560px;margin:0 auto;}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:14px;}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:8px;}
 svg{width:100%;height:auto;display:block;}
-.minibox{font-family:var(--mono);display:flex;flex-direction:column;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:10px 16px;}
-.minibox .row{display:flex;justify-content:space-between;font-size:14px;line-height:26px;color:var(--dim);letter-spacing:.5px;}
-.minibox .row b{color:var(--text);font-weight:bold;font-size:14px;}
-.minibox .row.mode{font-size:16px;line-height:30px;}
-.minibox .row.mode b{color:var(--green);font-size:16px;}
+.minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:14px 16px;}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
+.tcard{background:#101a17;border:1px solid var(--line);border-radius:6px;padding:12px;text-align:center;cursor:default;}
+.tcard.clickable{cursor:pointer;}
+.tcard-lbl{color:var(--dim);font-size:12px;letter-spacing:.5px;}
+.tcard-val{display:block;color:var(--text);font-size:26px;font-weight:bold;margin-top:4px;}
+.minibox .row{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;line-height:26px;color:var(--dim);letter-spacing:.3px;padding:8px 0;border-bottom:1px solid #1b2622;}
+.minibox .row:last-child{border-bottom:none;}
+.minibox .row b{color:var(--text);font-weight:bold;font-size:15px;}
+.minibox .row.mode{font-size:16px;}
+.minibox .row.mode b{color:var(--green);font-size:17px;}
 .pipe{fill:none;stroke:var(--pipe);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .pipe-inner{fill:none;stroke:#000;stroke-opacity:0.25;stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .flow{fill:none;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 10;opacity:0;transition:opacity .4s;}
@@ -56,10 +62,11 @@ svg{width:100%;height:auto;display:block;}
 .badge{font-size:10px;letter-spacing:1px;}
 .minibox .row.clickable{cursor:pointer;}
 .minibox .row.clickable:hover b{color:var(--amber);}
-.minibox .row .hint{font-size:10px;color:var(--dim);margin-left:6px;}
+.minibox .row .hint{font-size:10px;color:var(--dim);}
+.tcard.clickable:hover .tcard-lbl{color:var(--amber);}
 .temp-ctrl{display:flex;align-items:center;gap:8px;}
-.temp-ctrl button{padding:2px 10px;font-size:13px;line-height:1;}
-.offset-ctrl{display:none;align-items:center;justify-content:flex-end;gap:8px;font-size:11px;color:var(--dim);padding:2px 0 4px 0;}
+.temp-ctrl button{padding:2px 10px;font-size:14px;line-height:1;}
+.offset-ctrl{display:none;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--dim);margin-top:10px;padding-top:10px;border-top:1px solid var(--line);}
 .offset-ctrl.open{display:flex;}
 .offset-ctrl button{padding:1px 9px;font-size:13px;line-height:1;}
 .offset-ctrl b{color:var(--text);}
@@ -87,14 +94,14 @@ svg{width:100%;height:auto;display:block;}
 @keyframes spin{to{transform:rotate(360deg);}}
 .sun-ray{stroke:#e8a33d;stroke-width:2;opacity:0;animation:ray 2.4s ease-in-out infinite;}
 @keyframes ray{0%{opacity:0;}30%{opacity:.55;}100%{opacity:0;}}
-.statusbar{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;padding:12px 14px;background:#0d1512;border:1px solid var(--line);border-radius:6px;font-size:12px;}
+.statusbar{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;padding:10px 14px;background:#0d1512;border:1px solid var(--line);border-radius:6px;font-size:12px;}
 .statusbar .item{display:flex;align-items:center;gap:6px;color:var(--dim);}
 .statusbar .item b{color:var(--text);}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
 .dot.g{background:var(--green);box-shadow:0 0 6px var(--green);}
 .dot.r{background:var(--red);}
-.controls{display:flex;gap:10px;margin-top:12px;}
-button{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:8px 14px;font-family:var(--mono);font-size:11px;letter-spacing:1px;cursor:pointer;}
+.controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:8px 4px;font-family:var(--mono);font-size:11px;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
 button:hover{border-color:var(--amber);color:var(--amber);}
 button.active{border-color:var(--green);color:var(--green);}
 button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);}
@@ -126,15 +133,33 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   </div>
 </div>
 <div class="panel">
-<svg viewBox="0 0 560 935" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 560 1025" xmlns="http://www.w3.org/2000/svg">
 
   <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
-  <foreignObject x="10" y="0" width="540" height="340">
+  <foreignObject x="10" y="0" width="540" height="430">
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox">
-      <div class="row">HORA ACTUAL:<b id="statClock">—</b></div>
+
+      <div class="cards">
+        <div class="tcard clickable" id="rowT1">
+          <div class="tcard-lbl">T1 JACUZZI</div>
+          <b class="tcard-val" id="statT1">—</b>
+          <div class="offset-ctrl" id="offsetT1Ctrl">
+            OFFSET<button id="offT1Down">−</button><b id="offT1Val">—</b><button id="offT1Up">+</button>
+          </div>
+        </div>
+        <div class="tcard clickable" id="rowT2">
+          <div class="tcard-lbl">T2 SOLAR</div>
+          <b class="tcard-val" id="statT2">—</b>
+          <div class="offset-ctrl" id="offsetT2Ctrl">
+            OFFSET<button id="offT2Down">−</button><b id="offT2Val">—</b><button id="offT2Up">+</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">HORA ACTUAL<b id="statClock">—</b></div>
 
       <div class="row clickable" id="progRow">
-        PROGRAMA:<b id="progText">—</b><span class="hint">(toca para ajustar)</span>
+        PROGRAMA<span class="hint">(toca para ajustar)</span><b id="progText">—</b>
       </div>
       <div class="progedit" id="progEdit">
         <div class="fila">
@@ -148,9 +173,9 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         <button class="guardar" id="progGuardar">GUARDAR</button>
       </div>
 
-      <div class="row">SIGUIENTE PROGRAMA:<b id="nextProgText">—</b></div>
+      <div class="row">SIGUIENTE PROGRAMA<b id="nextProgText">—</b></div>
 
-      <div class="row">TEMP. OBJETIVO:
+      <div class="row">TEMP. OBJETIVO
         <div class="temp-ctrl">
           <button id="tempDown">−</button>
           <b id="tempSetVal">—</b>
@@ -158,7 +183,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
-      <div class="row">TEMP. DESCARGA SOLAR:
+      <div class="row">TEMP. DESCARGA SOLAR
         <div class="temp-ctrl">
           <button id="solarDisDown">−</button>
           <b id="solarDisVal">—</b>
@@ -166,30 +191,22 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
-      <div class="row mode">MODO:<b id="modeText">—</b></div>
-      <div class="row clickable" id="rowT1">T1 JACUZZI:<b id="statT1">—</b><span class="hint">(toca para calibrar)</span></div>
-      <div class="offset-ctrl" id="offsetT1Ctrl">
-        Offset:<button id="offT1Down">−</button><b id="offT1Val">—</b><button id="offT1Up">+</button>
-      </div>
-      <div class="row clickable" id="rowT2">T2 SOLAR:<b id="statT2">—</b><span class="hint">(toca para calibrar)</span></div>
-      <div class="offset-ctrl" id="offsetT2Ctrl">
-        Offset:<button id="offT2Down">−</button><b id="offT2Val">—</b><button id="offT2Up">+</button>
-      </div>
-      <div class="row">V1:<b id="statV1">—</b></div>
-      <div class="row">V2:<b id="statV2">—</b></div>
-      <div class="row">BOMBA:<b id="statPump">—</b></div>
+      <div class="row mode">MODO<b id="modeText">—</b></div>
+      <div class="row">V1<b id="statV1">—</b></div>
+      <div class="row">V2<b id="statV2">—</b></div>
+      <div class="row">BOMBA<b id="statPump">—</b></div>
     </div>
   </foreignObject>
 
-<g transform="translate(0,245)">
+<g transform="translate(0,315)">
 
   <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
-  <path class="pipe" d="M 320,570 L 320,290 L 320,250 A 10,10 0 0 1 341.33,250 L 341.33,290 A 10,10 0 0 0 362.67,290 L 362.67,250 A 10,10 0 0 1 384,250 L 384,290 A 10,10 0 0 0 405.33,290 L 405.33,250 A 10,10 0 0 1 426.67,250 L 426.67,290 A 10,10 0 0 0 448,290 L 448,250 A 10,10 0 0 1 469.33,250 L 469.33,290 A 10,10 0 0 0 490.67,290 L 490.67,250 A 10,10 0 0 1 512,250 L 512,290 L 512,570"/>
-  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,290 L 320,250 A 10,10 0 0 1 341.33,250 L 341.33,290 A 10,10 0 0 0 362.67,290 L 362.67,250 A 10,10 0 0 1 384,250 L 384,290 A 10,10 0 0 0 405.33,290 L 405.33,250 A 10,10 0 0 1 426.67,250 L 426.67,290 A 10,10 0 0 0 448,290 L 448,250 A 10,10 0 0 1 469.33,250 L 469.33,290 A 10,10 0 0 0 490.67,290 L 490.67,250 A 10,10 0 0 1 512,250 L 512,290"/>
-  <path class="flow hot" id="flowFromSerp" d="M 512,290 L 512,570"/>
+  <path class="pipe" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486 L 512,570"/>
+  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486"/>
+  <path class="flow hot" id="flowFromSerp" d="M 512,486 L 512,570"/>
 
   <g id="badgeT2">
-    <circle cx="416" cy="326" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
+    <circle cx="416" cy="426" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
   </g>
 
   <!-- ===== JACUZZI ===== -->
@@ -252,8 +269,8 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
     <text x="54" y="594.5" text-anchor="middle" class="val" id="tempJacuzzi" font-size="14">— °C</text>
 
-    <text x="416" y="329.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
-    <text x="416" y="350" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
+    <text x="416" y="429.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
+    <text x="416" y="450" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
 
     <text x="250" y="602" text-anchor="middle" class="lbl">MOTOR</text>
     <text x="320" y="602" text-anchor="middle" class="lbl">V1</text>
