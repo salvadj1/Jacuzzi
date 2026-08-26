@@ -11,6 +11,8 @@
 #include "storage.h"
 #include "schedule.h"
 #include "webpage.h"
+#include "datapage.h"
+#include "datalog.h"
 #include "wifi_manager.h"
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -175,6 +177,16 @@ void webServerBegin() {
       return;
     }
     request->send_P(200, "text/html", INDEX_HTML);
+  });
+
+  // Pagina de graficas del historico de temperaturas/eventos
+  server.on("/datos", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html", DATA_HTML);
+  });
+
+  // API con las muestras del historico (hasta 7 dias), en JSON
+  server.on("/api/history", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", datalogToJson());
   });
 
   server.begin();

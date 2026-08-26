@@ -77,3 +77,4 @@
 #define SENSOR_READ_MS      2000   // Cada cuanto se leen los sensores de temperatura
 #define BROADCAST_MS         900   // Cada cuanto se envia el estado por WebSocket
 #define AP_CONFIG_WINDOW_MS (5UL * 60UL * 1000UL)  // AP de configuracion abierto 5 min en cada arranque
+#define LOG_SAMPLE_INTERVAL_MS (15UL * 60UL * 1000UL) // Cada cuanto se registra una muestra periodica en el historico

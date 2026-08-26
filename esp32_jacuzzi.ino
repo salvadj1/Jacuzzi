@@ -29,6 +29,7 @@
 #include "relays.h"
 #include "temp_sensors.h"
 #include "schedule.h"
+#include "datalog.h"
 #include "ota.h"
 #include "web_server.h"
 #include <WiFi.h>
@@ -67,6 +68,9 @@ void setup() {
 
   Serial.println("[MAIN] Inicializando logica de programacion horaria...");
   setupSchedule();
+
+  Serial.println("[MAIN] Inicializando registro historico (datalog)...");
+  datalogInit();
 
   // El modo WiFi debe activarse ANTES de arrancar el servidor web: el
   // servidor (AsyncWebServer/AsyncTCP) necesita que la pila de red ya
@@ -108,6 +112,7 @@ void loop() {
 
   loopTempSensors();
   loopSchedule();
+  datalogLoop();
 
   if (millis() - lastBroadcast > BROADCAST_MS) {
     lastBroadcast = millis();

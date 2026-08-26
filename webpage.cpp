@@ -116,6 +116,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   <button id="btnForceSolar">FORZAR SOLAR</button>
   <button id="btnForceBypass" class="active">FORZAR FILTRO</button>
   <button id="btnWifi">CONFIGURAR WIFI</button>
+  <button onclick="location.href='/datos'">DATOS</button>
 </div>
 
 <div id="resetOverlay" class="reset-overlay">
