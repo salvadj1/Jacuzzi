@@ -78,3 +78,23 @@
 #define BROADCAST_MS         900   // Cada cuanto se envia el estado por WebSocket
 #define AP_CONFIG_WINDOW_MS (5UL * 60UL * 1000UL)  // AP de configuracion abierto 5 min en cada arranque
 #define LOG_SAMPLE_INTERVAL_MS (15UL * 60UL * 1000UL) // Cada cuanto se registra una muestra periodica en el historico
+
+// ---------------- Watchdog software ----------------
+// Si el loop() se queda colgado (por ejemplo, por un fallo en una
+// libreria de red) y no se "alimenta" el watchdog en este tiempo, el
+// ESP32 se reinicia solo en vez de quedarse encendido pero sin responder.
+#define WATCHDOG_TIMEOUT_S   20
+
+// ---------------- Reintento de conexion WiFi (backoff) ----------------
+// En vez de reintentar siempre cada 10s indefinidamente (lo que puede
+// machacar el radio/heap si nunca hay red disponible), el intervalo entre
+// reintentos crece progresivamente hasta un tope.
+#define WIFI_RETRY_MIN_MS   10000   // primer reintento: 10s
+#define WIFI_RETRY_MAX_MS   60000   // tope maximo entre reintentos: 60s
+#define WIFI_RETRY_STEP_MS  10000   // incremento por cada intento fallido
+
+// ---------------- Registro de diagnostico (para investigar cuelgues) ----------------
+// Guarda periodicamente heap libre, clientes WebSocket, estado WiFi, etc.
+// para poder revisar que paso si el sistema se queda "colgado" otra vez.
+#define DIAG_SAMPLE_INTERVAL_MS (5UL * 60UL * 1000UL) // una muestra cada 5 min
+#define DIAG_LOG_CAPACITY   400 // a 5 min/muestra cubre unos 33h; con eventos extra, mas de un dia largo

@@ -80,3 +80,12 @@ void storageLoadTempOffsets();
 
 // Guarda los offsets actuales de g_state.offsetT1 / g_state.offsetT2
 void storageSaveTempOffsets();
+
+// ---------------- Estado del modo automatico ----------------
+// Persiste si el modo automatico estaba activado, para que al reiniciarse
+// el ESP32 (por corte de luz, watchdog, etc.) vuelva a quedar exactamente
+// como estaba, sin que el usuario tenga que volver a activarlo a mano.
+void storageLoadAutoEnabled();
+
+// Guarda el estado actual de g_state.autoEnabled
+void storageSaveAutoEnabled();

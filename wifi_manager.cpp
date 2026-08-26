@@ -25,6 +25,7 @@ static bool apActive = false;
 static bool routesRegistered = false; // las rutas solo se registran una vez, aunque el AP se active varias veces
 static unsigned long apOpenedAt = 0;
 static unsigned long lastReconnectAttempt = 0;
+static uint8_t failedReconnectAttempts = 0; // crece con cada intento fallido, para el backoff
 
 // Modo de conexion elegido por el usuario (persistido en NVS):
 // 0 = usar redes wifi disponibles, 1 = AP permanente. Ver storage.h.
@@ -410,13 +411,26 @@ void loopWifi() {
 
   if (wifiMode == WIFI_MODE_AP_PERMANENT) return; // no se intenta STA en este modo
 
-  if (WiFi.status() != WL_CONNECTED && millis() - lastReconnectAttempt > 10000) {
+  if (WiFi.status() == WL_CONNECTED) {
+    failedReconnectAttempts = 0; // conectados: se reinicia el backoff para la proxima vez que se caiga
+    return;
+  }
+
+  // Backoff progresivo: 10s, 20s, 30s... hasta el tope configurado. Evita
+  // escanear/reconectar sin parar (y sin exito) cuando no hay ninguna red
+  // conocida visible, lo que en la practica machaca el radio y el heap.
+  unsigned long interval = WIFI_RETRY_MIN_MS + (unsigned long)failedReconnectAttempts * WIFI_RETRY_STEP_MS;
+  if (interval > WIFI_RETRY_MAX_MS) interval = WIFI_RETRY_MAX_MS;
+
+  if (millis() - lastReconnectAttempt > interval) {
     lastReconnectAttempt = millis();
-    Serial.println("[WIFI] Sin conexion STA, reintentando...");
+    Serial.printf("[WIFI] Sin conexion STA, reintentando... (intento #%u, proximo en %lus si falla)\n",
+      failedReconnectAttempts + 1, interval / 1000UL);
     String ssid, pass;
     if (findBestKnownNetwork(ssid, pass) >= 0) {
       WiFi.begin(ssid.c_str(), pass.c_str());
     }
+    if (failedReconnectAttempts < 255) failedReconnectAttempts++;
   }
 }
 

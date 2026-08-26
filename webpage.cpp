@@ -26,9 +26,9 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:14px;}
 h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;}
 .wrap{max-width:560px;margin:0 auto;}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:8px;}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px;margin-top:5px;}
 svg{width:100%;height:auto;display:block;}
-.minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:16px 18px;}
+.minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:5px 5px;}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;}
 .tcard{background:transparent;border:none;border-bottom:2px solid var(--amber);padding:10px 4px;text-align:left;cursor:default;}
 .tcard.clickable{cursor:pointer;}
@@ -37,7 +37,7 @@ svg{width:100%;height:auto;display:block;}
 .minibox .row{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;padding:10px 0;border-bottom:1px solid #223229;}
 .minibox .row:last-child{border-bottom:none;}
 .minibox .row .lbl{color:#ffffff;font-weight:900;font-size:14px;letter-spacing:.4px;}
-.minibox .row b{color:#7fe8ff;font-weight:900;font-size:15px;}
+.minibox .row b{color:#ebed8f;font-weight:900;font-size:15px;}
 .minibox .row.mode b{color:var(--green);font-size:16px;}
 .pipe{fill:none;stroke:var(--pipe);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .pipe-inner{fill:none;stroke:#000;stroke-opacity:0.25;stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
@@ -113,10 +113,11 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 <div class="controls">
   <button id="btnAuto">MODO AUTO</button>
   <button id="btnPump">BOMBA MANUAL</button>
-  <button id="btnForceSolar">FORZAR SOLAR</button>
-  <button id="btnForceBypass" class="active">FORZAR FILTRO</button>
-  <button id="btnWifi">CONFIGURAR WIFI</button>
+  <button id="btnForceSolar">SOLAR</button>
+  <button id="btnForceBypass" class="active">FILTRACION</button>
+  <button id="btnWifi">WIFI</button>
   <button onclick="location.href='/datos'">DATOS</button>
+  <button id="btnRestart">RESTART</button>
 </div>
 
 <div id="resetOverlay" class="reset-overlay">
@@ -211,13 +212,13 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
 <g transform="translate(-20,165) scale(1.08)">
 
-  <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px ===== -->
-  <path class="pipe" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486 L 512,570"/>
-  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,486 L 320,446 A 10,10 0 0 1 341.33,446 L 341.33,486 A 10,10 0 0 0 362.67,486 L 362.67,446 A 10,10 0 0 1 384,446 L 384,486 A 10,10 0 0 0 405.33,486 L 405.33,446 A 10,10 0 0 1 426.67,446 L 426.67,486 A 10,10 0 0 0 448,486 L 448,446 A 10,10 0 0 1 469.33,446 L 469.33,486 A 10,10 0 0 0 490.67,486 L 490.67,446 A 10,10 0 0 1 512,446 L 512,486"/>
-  <path class="flow hot" id="flowFromSerp" d="M 512,486 L 512,570"/>
+  <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px; separado 10px extra del filtro alargando las tuberias que suben/bajan ===== -->
+  <path class="pipe" d="M 320,570 L 320,456 L 320,416 A 10,10 0 0 1 341.33,416 L 341.33,456 A 10,10 0 0 0 362.67,456 L 362.67,416 A 10,10 0 0 1 384,416 L 384,456 A 10,10 0 0 0 405.33,456 L 405.33,416 A 10,10 0 0 1 426.67,416 L 426.67,456 A 10,10 0 0 0 448,456 L 448,416 A 10,10 0 0 1 469.33,416 L 469.33,456 A 10,10 0 0 0 490.67,456 L 490.67,416 A 10,10 0 0 1 512,416 L 512,456 L 512,570"/>
+  <path class="flow cold" id="flowToSerp" d="M 320,570 L 320,456 L 320,416 A 10,10 0 0 1 341.33,416 L 341.33,456 A 10,10 0 0 0 362.67,456 L 362.67,416 A 10,10 0 0 1 384,416 L 384,456 A 10,10 0 0 0 405.33,456 L 405.33,416 A 10,10 0 0 1 426.67,416 L 426.67,456 A 10,10 0 0 0 448,456 L 448,416 A 10,10 0 0 1 469.33,416 L 469.33,456 A 10,10 0 0 0 490.67,456 L 490.67,416 A 10,10 0 0 1 512,416 L 512,456"/>
+  <path class="flow hot" id="flowFromSerp" d="M 512,476 L 512,570"/>
 
   <g id="badgeT2">
-    <circle cx="416" cy="426" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
+    <circle cx="416" cy="396" r="10" fill="#0d1512" stroke="var(--amber)" stroke-width="2"/>
   </g>
 
   <!-- ===== JACUZZI ===== -->
@@ -280,8 +281,8 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
     <text x="54" y="594.5" text-anchor="middle" class="val" id="tempJacuzzi" font-size="14">— °C</text>
 
-    <text x="416" y="429.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
-    <text x="416" y="450" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
+    <text x="416" y="399.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
+    <text x="416" y="420" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
 
     <text x="250" y="602" text-anchor="middle" class="lbl">MOTOR</text>
     <text x="320" y="602" text-anchor="middle" class="lbl">V1</text>
@@ -553,6 +554,13 @@ el('btnWifi').onclick = ()=>{
 
 el('btnResetCancelar').onclick = ()=>{
   el('resetOverlay').classList.remove('open');
+};
+
+// ---- Reinicio del ESP32, con confirmacion para evitar pulsaciones accidentales ----
+el('btnRestart').onclick = ()=>{
+  if(confirm('¿Reiniciar el sistema ahora?')){
+    sendCmd({ cmd:'restart' });
+  }
 };
 
 // Reloj visual: se actualiza cada segundo interpolando localmente entre

@@ -13,6 +13,8 @@
 #include "webpage.h"
 #include "datapage.h"
 #include "datalog.h"
+#include "diagpage.h"
+#include "diaglog.h"
 #include "wifi_manager.h"
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -136,6 +138,12 @@ static void handleCommand(const String &jsonStr) {
     // priorizar, eliminar, guardar y salir) se hace en esa propia pagina.
     Serial.println("[WEB] Activacion de captive portal solicitada desde la app");
     wifiActivateConfigAp();
+
+  } else if (cmd == "restart") {
+    Serial.println("[WEB] Reinicio solicitado desde la app");
+    broadcastState(); // avisa a los clientes antes de reiniciar
+    delay(300);       // da tiempo a que el WebSocket envie el mensaje
+    ESP.restart();
   }
 
   broadcastState(); // confirma el cambio a todos los clientes inmediatamente
@@ -189,6 +197,16 @@ void webServerBegin() {
     request->send(200, "application/json", datalogToJson());
   });
 
+  // Pagina de diagnostico (heap, WiFi, clientes, motivos de reinicio)
+  server.on("/diag", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html", DIAG_HTML);
+  });
+
+  // API con las muestras de diagnostico, en JSON
+  server.on("/api/diag", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", diaglogToJson());
+  });
+
   server.begin();
   Serial.println("[WEB] Servidor listo (accesible por la IP que tenga asignada en cada momento)");
 }
@@ -199,4 +217,15 @@ AsyncWebServer& webServerInstance() {
 
 void broadcastState() {
   ws.textAll(buildStateJson());
+}
+
+void webServerLoop() {
+  // Purga clientes WebSocket muertos (desconexiones sucias). Es la causa
+  // mas comun de que el servidor deje de responder tras varias horas
+  // funcionando sin que nadie lo reinicie manualmente.
+  ws.cleanupClients();
+}
+
+uint8_t wsClientCount() {
+  return (uint8_t)ws.count();
 }

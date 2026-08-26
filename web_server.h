@@ -36,3 +36,14 @@ AsyncWebServer& webServerInstance();
 // Envia el estado actual a todos los clientes conectados por WebSocket.
 // Llamar periodicamente desde el loop() principal (cada BROADCAST_MS).
 void broadcastState();
+
+// Mantenimiento periodico del servidor: limpia clientes WebSocket que se
+// desconectaron sin cerrar limpiamente (movil que pierde cobertura, WiFi
+// que se duerme, etc.). Sin esto, esas conexiones "zombie" se acumulan y
+// terminan agotando memoria/colas internas hasta que el servidor deja de
+// responder. Llamar en cada vuelta del loop() principal.
+void webServerLoop();
+
+// Numero de clientes WebSocket actualmente conectados (para el registro
+// de diagnostico).
+uint8_t wsClientCount();

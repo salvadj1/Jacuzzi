@@ -16,6 +16,8 @@
  *   ota.*             Actualizacion de firmware por WiFi
  *   web_server.*      Servidor web + WebSocket con el navegador
  *   webpage.*         HTML de la app embebido en PROGMEM
+ *   diaglog.*         Registro de diagnostico (heap, wifi, reinicios...)
+ *   diagpage.*        HTML de la pagina "/diag" embebido en PROGMEM
  *
  * Todos los mensajes de estado del sistema se imprimen por el Monitor
  * Serie (115200 baudios) con un prefijo [MODULO] para identificar de
@@ -30,9 +32,11 @@
 #include "temp_sensors.h"
 #include "schedule.h"
 #include "datalog.h"
+#include "diaglog.h"
 #include "ota.h"
 #include "web_server.h"
 #include <WiFi.h>
+#include <esp_task_wdt.h>
 
 // Estado global unico del sistema (declarado como "extern" en data.h)
 SystemState g_state;
@@ -55,10 +59,12 @@ void setup() {
   storageLoadTargetTemp();
   storageLoadTempOffsets();
   storageLoadSolarDischargeTemp();
+  storageLoadAutoEnabled();
   Serial.printf("[MAIN] Programa cargado: %02d:%02d - %02d:%02d\n",
     g_state.schedule.startHour, g_state.schedule.startMinute,
     g_state.schedule.endHour, g_state.schedule.endMinute);
   Serial.printf("[MAIN] Temperatura objetivo cargada: %.1f C\n", g_state.targetTemp);
+  Serial.printf("[MAIN] Modo automatico cargado: %s\n", g_state.autoEnabled ? "ACTIVADO" : "DESACTIVADO");
 
   Serial.println("[MAIN] Inicializando reles...");
   setupRelays();
@@ -71,6 +77,17 @@ void setup() {
 
   Serial.println("[MAIN] Inicializando registro historico (datalog)...");
   datalogInit();
+
+  Serial.println("[MAIN] Inicializando registro de diagnostico...");
+  diaglogInit();
+
+  // Watchdog software: si el loop() se queda colgado (por ejemplo, un
+  // fallo en una libreria de red) y no se "alimenta" durante este tiempo,
+  // el ESP32 se reinicia solo en vez de quedarse encendido pero sin
+  // responder. Se alimenta al final de cada vuelta del loop().
+  Serial.println("[MAIN] Inicializando watchdog software...");
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); // API de arduino-esp32 core 2.x: (segundos, reiniciar al saltar)
+  esp_task_wdt_add(NULL); // vigila la tarea actual (loop principal)
 
   // El modo WiFi debe activarse ANTES de arrancar el servidor web: el
   // servidor (AsyncWebServer/AsyncTCP) necesita que la pila de red ya
@@ -113,9 +130,13 @@ void loop() {
   loopTempSensors();
   loopSchedule();
   datalogLoop();
+  webServerLoop();               // purga clientes WebSocket desconectados
+  diaglogLoop(wsClientCount());  // registro de diagnostico (heap, wifi, clientes...)
 
   if (millis() - lastBroadcast > BROADCAST_MS) {
     lastBroadcast = millis();
     broadcastState();
   }
+
+  esp_task_wdt_reset(); // "alimenta" el watchdog: confirma que el loop sigue vivo
 }

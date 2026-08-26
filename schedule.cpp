@@ -10,6 +10,7 @@
 #include "config.h"
 #include "data.h"
 #include "relays.h"
+#include "storage.h"
 #include <time.h>
 
 void setupSchedule() {
@@ -33,6 +34,7 @@ void setValves(bool activo) {
 
 void setAutoEnabled(bool enabled) {
   g_state.autoEnabled = enabled;
+  storageSaveAutoEnabled(); // persistido: si el ESP32 se reinicia, vuelve con el mismo estado
   Serial.printf("[SCHED] Modo auto %s\n", enabled ? "ACTIVADO" : "DESACTIVADO");
   // Si se desactiva el auto, las valvulas pasan a obedecer inmediatamente
   // al selector manual (forceSolar); lo decide loopSchedule() en el

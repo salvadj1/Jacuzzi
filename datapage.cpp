@@ -81,7 +81,7 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 </head>
 <body>
 <div class="wrap">
-  <h1>HISTORICO <a class="back" href="/">&larr; VOLVER</a></h1>
+  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" href="/diag">DIAGNOSTICO</a><a class="back" href="/">&larr; VOLVER</a></span></h1>
 
   <div class="panel">
     <div class="day-pager" id="pager"></div>

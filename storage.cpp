@@ -178,6 +178,20 @@ void storageSaveTempOffsets() {
   prefsTemp.end();
 }
 
+// ---------------- Estado del modo automatico ----------------
+// Reutiliza el namespace "schedule" (tiene relacion directa con el programa).
+void storageLoadAutoEnabled() {
+  prefsSchedule.begin("schedule", true);
+  g_state.autoEnabled = prefsSchedule.getBool("autoOn", false);
+  prefsSchedule.end();
+}
+
+void storageSaveAutoEnabled() {
+  prefsSchedule.begin("schedule", false);
+  prefsSchedule.putBool("autoOn", g_state.autoEnabled);
+  prefsSchedule.end();
+}
+
 // ---------------- Limite de descarga solar ----------------
 // Reutiliza el mismo namespace "temp".
 void storageLoadSolarDischargeTemp() {
