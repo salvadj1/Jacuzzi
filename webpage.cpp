@@ -39,6 +39,16 @@ svg{width:100%;height:auto;display:block;}
 .minibox .row .lbl{color:#ffffff;font-weight:900;font-size:14px;letter-spacing:.4px;}
 .minibox .row b{color:#ebed8f;font-weight:900;font-size:15px;}
 .minibox .row.mode b{color:var(--green);font-size:16px;}
+.discharge-bar{display:none;background:#1a1408;border:1px solid var(--amber);border-radius:6px;padding:8px 12px;margin-bottom:6px;text-align:center;}
+.discharge-bar.on{display:block;}
+.discharge-bar b{color:var(--amber);font-size:13px;letter-spacing:.5px;}
+.minibox .row2{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:10px 0;border-bottom:1px solid #223229;}
+.minibox .row2:last-child{border-bottom:none;}
+.minibox .row2 .cell{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;}
+.minibox .row2 .cell.right{padding-left:14px;}
+.minibox .row2 .cell .lbl{color:#ffffff;font-weight:900;font-size:14px;letter-spacing:.4px;}
+.minibox .row2 .cell b{color:#ebed8f;font-weight:900;font-size:15px;}
+.minibox .row2 .cell.mode b{color:var(--green);font-size:16px;}
 .pipe{fill:none;stroke:var(--pipe);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .pipe-inner{fill:none;stroke:#000;stroke-opacity:0.25;stroke-width:9;stroke-linecap:round;stroke-linejoin:round;}
 .flow{fill:none;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 10;opacity:0;transition:opacity .4s;}
@@ -138,8 +148,12 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 <svg viewBox="0 0 560 885" xmlns="http://www.w3.org/2000/svg">
 
   <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
-  <foreignObject x="10" y="0" width="540" height="535">
+  <foreignObject x="10" y="0" width="540" height="560">
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox">
+
+      <div class="discharge-bar" id="dischargeBar">
+        <b>DESCARGA SOLAR EN CURSO · <span id="dischargeTime">—</span></b>
+      </div>
 
       <div class="cards">
         <div class="tcard clickable" id="rowT1">
@@ -158,6 +172,36 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
 
+      <div class="cards">
+        <div class="tcard clickable" id="rowTempObj">
+          <div class="tcard-lbl">TEMP. OBJETIVO</div>
+          <b class="tcard-val" id="tempSetVal">—</b>
+          <div class="offset-ctrl" id="tempObjCtrl">
+            <button id="tempDown">−</button><button id="tempUp">+</button>
+          </div>
+        </div>
+        <div class="tcard clickable" id="rowTempDis">
+          <div class="tcard-lbl">TEMP. DESCARGA SOLAR</div>
+          <b class="tcard-val" id="solarDisVal">—</b>
+          <div class="offset-ctrl" id="tempDisCtrl">
+            <button id="solarDisDown">−</button><button id="solarDisUp">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
+      <div class="row2">
+        <span class="cell"><span class="lbl">BOMBA</span><b id="statPump">—</b></span>
+        <span class="cell right mode"><span class="lbl">MODO</span><b id="modeText">—</b></span>
+      </div>
+      <div class="row2">
+        <span class="cell"><span class="lbl">V1</span><b id="statV1">—</b></span>
+        <span class="cell right"><span class="lbl">V2</span><b id="statV2">—</b></span>
+      </div>
+    </div>
+
+    <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
       <div class="row clickable" id="clockRow">
         <span class="lbl">HORA ACTUAL
           <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -186,27 +230,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
 
       <div class="row"><span class="lbl">SIGUIENTE PROGRAMA</span><b id="nextProgText">—</b></div>
-
-      <div class="row"><span class="lbl">TEMP. OBJETIVO</span>
-        <div class="temp-ctrl">
-          <button id="tempDown">−</button>
-          <b id="tempSetVal">—</b>
-          <button id="tempUp">+</button>
-        </div>
-      </div>
-
-      <div class="row"><span class="lbl">TEMP. DESCARGA SOLAR</span>
-        <div class="temp-ctrl">
-          <button id="solarDisDown">−</button>
-          <b id="solarDisVal">—</b>
-          <button id="solarDisUp">+</button>
-        </div>
-      </div>
-
-      <div class="row mode"><span class="lbl">MODO</span><b id="modeText">—</b></div>
-      <div class="row"><span class="lbl">V1</span><b id="statV1">—</b></div>
-      <div class="row"><span class="lbl">V2</span><b id="statV2">—</b></div>
-      <div class="row"><span class="lbl">BOMBA</span><b id="statPump">—</b></div>
     </div>
   </foreignObject>
 
@@ -389,7 +412,17 @@ function render(){
   if(state.pumpOn){
     modeLabel = solarActive ? 'CALENTANDO (SOLAR)' : 'FILTRANDO (NORMAL)';
   }
+  if(state.dischargeActive) modeLabel = 'DESCARGA SOLAR';
   el('modeText').textContent = modeLabel;
+
+  // Cuenta atras de la descarga forzada del serpentin solar (ventana de 5 min)
+  el('dischargeBar').classList.toggle('on', !!state.dischargeActive);
+  if(state.dischargeActive){
+    const s = Math.max(0, state.dischargeRemainSec|0);
+    const mm = String(Math.floor(s/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    el('dischargeTime').textContent = mm+':'+ss;
+  }
 
   // btnAuto y btnPump son interruptores independientes (ON/OFF propio).
   // btnForceSolar/btnForceBypass son mutuamente excluyentes entre si.
@@ -515,15 +548,20 @@ el('solarDisDown').onclick = ()=>{
 // ---- Offset de calibracion de T1/T2, resolucion 0.5°C. Cada fila de
 // temperatura del listado despliega su propio panel de ajuste al tocarla,
 // y se cierra si se toca la misma fila o la otra ----
-function toggleOffsetPanel(panelId, otherPanelId){
+const ALL_TCARD_PANELS = ['offsetT1Ctrl','offsetT2Ctrl','tempObjCtrl','tempDisCtrl'];
+function toggleOffsetPanel(panelId){
   const wasOpen = el(panelId).classList.contains('open');
-  el(otherPanelId).classList.remove('open');
+  ALL_TCARD_PANELS.forEach(id => el(id).classList.remove('open'));
   el(panelId).classList.toggle('open', !wasOpen);
 }
-el('rowT1').onclick = ()=> toggleOffsetPanel('offsetT1Ctrl','offsetT2Ctrl');
-el('rowT2').onclick = ()=> toggleOffsetPanel('offsetT2Ctrl','offsetT1Ctrl');
+el('rowT1').onclick = ()=> toggleOffsetPanel('offsetT1Ctrl');
+el('rowT2').onclick = ()=> toggleOffsetPanel('offsetT2Ctrl');
+el('rowTempObj').onclick = ()=> toggleOffsetPanel('tempObjCtrl');
+el('rowTempDis').onclick = ()=> toggleOffsetPanel('tempDisCtrl');
 el('offsetT1Ctrl').onclick = (e)=> e.stopPropagation();
 el('offsetT2Ctrl').onclick = (e)=> e.stopPropagation();
+el('tempObjCtrl').onclick = (e)=> e.stopPropagation();
+el('tempDisCtrl').onclick = (e)=> e.stopPropagation();
 
 el('offT1Up').onclick   = ()=>{ if(state) sendCmd({ cmd:'setTempOffset', sensor:1, value: +(state.offsetT1+0.5).toFixed(1) }); };
 el('offT1Down').onclick = ()=>{ if(state) sendCmd({ cmd:'setTempOffset', sensor:1, value: +(state.offsetT1-0.5).toFixed(1) }); };

@@ -42,6 +42,12 @@ static String buildStateJson() {
   doc["targetTemp"]   = g_state.targetTemp;
   doc["solarDischargeTemp"] = g_state.solarDischargeTemp;
 
+  // Descarga forzada del serpentin solar: activa + segundos restantes
+  doc["dischargeActive"] = g_state.dischargeActive;
+  long dischargeRemainMs = (long)(g_state.dischargeUntil - millis());
+  doc["dischargeRemainSec"] = g_state.dischargeActive && dischargeRemainMs > 0
+                                 ? (dischargeRemainMs / 1000) : 0;
+
   time_t now = time(nullptr);
   doc["clock"] = (unsigned long)now;
 
