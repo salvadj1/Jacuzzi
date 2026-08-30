@@ -1,7 +1,22 @@
 # Control Jacuzzi ESP32 (DevKit / NodeMCU-32S)
 
+![Jacuzzi Controller](Imagen%20Caja.png)
+
 Proyecto completo: control de bomba, valvulas de desvio solar, sensores
 de temperatura, programacion horaria y web de control en tiempo real.
+
+📘 Manual de usuario oficial (instalacion, primer arranque y uso diario
+paso a paso): **[Manual_Usuario_Jacuzzi_Controller.docx](Manual_Usuario_Jacuzzi_Controller.docx)**
+
+## Arquitectura del firmware
+
+![Arquitectura de modulos](diagrama_arquitectura.png)
+
+El `.ino` no contiene logica propia: solo inicializa y llama a
+setup()/loop() de cada modulo. Todos los modulos leen y escriben sobre
+un unico estado compartido (`g_state`, definido en `data.h`), lo que
+mantiene cada archivo pequeño, independiente y facil de reutilizar en
+otro proyecto.
 
 ## Estructura del proyecto
 
@@ -16,8 +31,12 @@ esp32_jacuzzi/
 ├── temp_sensors.*       -> Lectura de los 2 NTC10k (jacuzzi y solar)
 ├── schedule.*            -> Programa horario + logica de modo automatico
 ├── ota.*                 -> Actualizacion de firmware por WiFi
+├── datalog.*             -> Historico de temperaturas/eventos (grafica /datos)
+├── diaglog.*             -> Registro de diagnostico (heap, wifi, reinicios)
 ├── web_server.*          -> Servidor web + WebSocket
-└── webpage.*             -> HTML de la app embebido en PROGMEM (sin filesystem)
+├── webpage.*             -> HTML de la app principal embebido en PROGMEM
+├── datapage.*            -> HTML de la pagina /datos embebido en PROGMEM
+└── diagpage.*            -> HTML de la pagina /diag embebido en PROGMEM
 ```
 
 ## Librerias necesarias (Gestor de Librerias del IDE de Arduino)
@@ -44,20 +63,27 @@ esp32_jacuzzi/
 | NTC T1 (jacuzzi)                | GPIO 32 |
 | NTC T2 (solar)                  | GPIO 33 |
 | Rele 1 - Bomba/Motor            | GPIO 4  |
-| Rele 2 - Valvula V1             | GPIO 16 |
-| Rele 3 - Valvula V2             | GPIO 17 |
+| Rele 2 - Ambas valvulas (V1 NA / V2 NC) | GPIO 17 |
 | Rele 4 - Libre / futuro         | GPIO 18 |
 | Boton reset WiFi (boton BOOT)   | GPIO 0  |
 | LED de estado (LED azul on-board) | GPIO 2  |
 
-Los reles se colocaron en el lado izquierdo del NodeMCU-32S (GPIO 4,
-16, 17, 18) para acortar el cableado; son pines de salida libres, sin
-conflicto con el flash ni con los NTC (32/33). Si tu modulo lleva
-PSRAM (variante WROVER) no uses 16/17, ya que estan reservados
-internamente; en un NodeMCU-32S normal (WROOM) estan libres.
+Los reles se colocaron en pines libres del NodeMCU-32S (GPIO 4, 17, 18),
+sin conflicto con el flash ni con los NTC (32/33). Si tu modulo lleva
+PSRAM (variante WROVER) no uses el GPIO 17, ya que esta reservado
+internamente; en un NodeMCU-32S normal (WROOM) esta libre.
+
+Las dos valvulas se mueven con un **unico rele**: al estar una en
+posicion Normalmente Abierta y la otra en Normalmente Cerrada, activar
+o desactivar ese rele las deja siempre en posiciones opuestas (reposo
+= filtro directo / activado = desvio al serpentin solar).
 
 Si tu modulo de reles es activo en HIGH en vez de en LOW, cambia
 `RELAY_ACTIVE_LOW` a `false` en `config.h`.
+
+### Esquema de conexion de los sensores NTC
+
+![Esquema de conexion NTC](esquema_ntc.png)
 
 **Sensores NTC10k B3950 (analogicos, 2 hilos, sin polaridad):** cada uno
 va en un divisor de tension 3.3V — resistencia fija de 10kΩ — NTC — GND,
@@ -148,6 +174,18 @@ y version de Android/iOS), siempre puedes entrar manualmente a
 Una vez el ESP32 esta en tu red, aparecera en el IDE de Arduino como
 puerto de red (`jacuzzi-esp32`) para subir nuevo firmware sin cable.
 
+## Paginas web y API
+
+| Ruta | Contenido |
+|---|---|
+| `/` | App principal de control (o portal de configuracion WiFi si se accede desde el AP) |
+| `/datos` | Grafica del historico de temperaturas y eventos |
+| `/api/history` | Historico en JSON (hasta 7 dias), usado por `/datos` |
+| `/diag` | Panel de diagnostico: heap, WiFi, clientes, motivo de reinicio |
+| `/api/diag` | Muestras de diagnostico en JSON |
+| `/api/diag/clear` (POST) | Borra el historico de diagnostico |
+| `/ws` | WebSocket: estado en tiempo real + envio de comandos |
+
 ## Monitor Serie (115200 baudios)
 
 Todo el arranque y el funcionamiento imprime mensajes con un prefijo
@@ -186,3 +224,12 @@ cuando un cliente web se conecta o envia un comando.
   la llamada a `configTime()` dentro de `esp32_jacuzzi.ino`), y tambien
   puede ajustarse manualmente desde el panel de programa de la web. La
   fila "HORA ACTUAL" de la web muestra fecha y hora juntas.
+- **Watchdog software**: si `loop()` se cuelga y no se "alimenta"
+  durante `WATCHDOG_TIMEOUT_S` (20s), el ESP32 se reinicia solo.
+- **Reconexion WiFi con backoff**: los reintentos de conexion crecen
+  progresivamente (`WIFI_RETRY_MIN_MS` → `WIFI_RETRY_MAX_MS`) para no
+  saturar el radio si nunca hay red disponible.
+- **Historico y diagnostico**: `datalog.*` guarda temperaturas/eventos
+  para la grafica de `/datos`, y `diaglog.*` guarda heap libre, RSSI y
+  motivo de reinicio para investigar cuelgues desde `/diag`, ambos en
+  buffers circulares respaldados en NVS.

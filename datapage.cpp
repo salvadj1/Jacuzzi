@@ -41,6 +41,9 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .day-hdr{flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
 .day-hdr .name{font-size:13px;font-weight:900;color:#fff;letter-spacing:.5px;}
 .day-hdr .today-badge{font-size:10px;color:#0b1210;background:var(--amber);padding:3px 8px;border-radius:8px;font-weight:900;}
+.day-hdr .right{display:flex;gap:6px;align-items:center;}
+.btn-del-dia{font-size:10px;color:var(--red);background:transparent;border:1px solid var(--line);padding:4px 8px;border-radius:6px;cursor:pointer;font-family:var(--mono);}
+.btn-del-dia:hover{border-color:var(--red);}
 
 .donuts{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:space-between;row-gap:8px;margin-bottom:8px;}
 .donut-box{text-align:center;flex:1 1 18%;min-width:58px;}
@@ -365,7 +368,7 @@ function buildUI(){
     page.className = 'day-page';
     page.innerHTML =
       '<div class="day-hdr"><span class="name">'+DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1)+'</span>'+
-      (isToday?'<span class="today-badge">HOY</span>':'')+'</div>'+
+      '<span class="right">'+(isToday?'<span class="today-badge">HOY</span>':'')+'<button class="btn-del-dia" data-daykey="'+day.key+'">BORRAR DIA</button></span></div>'+
       '<div class="donuts">'+
         '<div class="donut-box">'+donutSVG(t[2]/totalDay,'#e0672e',54)+'<div class="val">SOLAR<br><b>'+fmtDur(t[2])+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#2fa6c9',54)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
@@ -373,9 +376,25 @@ function buildUI(){
         '<div class="donut-box">'+donutSVG(descargasPct,'#e8a33d',54)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(bonusPct,bonusColor,54)+'<div class="val">BONUS TÉRMICO<br><b class="'+bonusClass+'">'+bonusTxt+'</b></div></div>'+
       '</div>'+
-      '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom · doble-toque: reset</div></div>';
+      '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
     pager.appendChild(page);
     pageStates.push({ zoom: ZOOM_MIN, evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
+
+    // Borrado de este dia concreto: pide confirmacion (no se puede
+    // deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
+    page.querySelector('.btn-del-dia').addEventListener('click', async () => {
+      const label = DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1);
+      if (!confirm('¿Borrar todo el registro del '+label+'? Esta accion no se puede deshacer.')) return;
+      const fromTs = Math.floor(day.date.getTime()/1000);
+      const toTs = fromTs + 86400;
+      try {
+        await fetch('/api/history/deleteday?from='+fromTs+'&to='+toTs, { method: 'POST' });
+      } catch (e) {
+        alert('Error al borrar el dia.');
+        return;
+      }
+      loadData();
+    });
 
     const cell = document.createElement('div');
     cell.className = 'week-cell'+(isToday?' today sel':'');
@@ -460,14 +479,25 @@ function attachInteractivity(){
       if(e.touches.length<2) pinchStartDist = null;
     });
 
-    // Zoom con la rueda del raton en PC, centrado en la posicion del cursor
-    // no es necesario porque el contenedor ya hace scroll horizontal solo;
-    // basta con escalar el zoom de forma progresiva por cada "muesca".
+    // Zoom con la rueda del raton en PC, anclado a la posicion del cursor:
+    // se calcula que punto del contenido esta bajo el raton ANTES de
+    // cambiar el zoom, y despues se ajusta el scroll para que ese mismo
+    // punto se quede bajo el cursor (si no, al hacer zoom out el punto
+    // "se escapa" hacia la izquierda y parece que no ha pasado nada).
     st.scrollEl.addEventListener('wheel', e=>{
       e.preventDefault();
+      const rect = st.scrollEl.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const contentX = st.scrollEl.scrollLeft + cursorX; // punto bajo el cursor, en coords. del canvas
+
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      st.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, st.zoom * factor));
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, st.zoom * factor));
+      const ratio = newZoom / st.zoom;
+      st.zoom = newZoom;
       redrawPage(i);
+
+      const maxScroll = Math.max(0, st.scrollEl.scrollWidth - rect.width);
+      st.scrollEl.scrollLeft = Math.max(0, Math.min(contentX*ratio - cursorX, maxScroll));
     }, {passive:false});
 
     st.canvas.addEventListener('touchend', e=>{
@@ -505,6 +535,17 @@ function positionMarker(pageIdx){
   st.marker.style.top  = p.y+'px';
   st.marker.classList.add('show');
 }
+// Centra horizontalmente la vista (scroll del contenedor) en el punto
+// "x" del evento, para que no se pierda de vista si hay zoom aplicado
+// (con zoom alto, un evento fuera del tramo visible no se ve aunque el
+// marcador este correctamente colocado en sus coordenadas).
+function centerViewOn(pageIdx, x){
+  const st = pageStates[pageIdx];
+  const rect = st.scrollEl.getBoundingClientRect();
+  const maxScroll = Math.max(0, st.scrollEl.scrollWidth - rect.width);
+  const target = Math.max(0, Math.min(x - rect.width/2, maxScroll));
+  st.scrollEl.scrollTo({ left: target, behavior: 'smooth' });
+}
 function hideAllMarkers(){
   pageStates.forEach(st=> st.marker.classList.remove('show'));
 }
@@ -518,6 +559,7 @@ function openEvt(pageIdx, evtIdx){
   hideAllMarkers();
   curEvtPage = pageIdx; curEvtIndex = evtIdx;
   positionMarker(pageIdx);
+  centerViewOn(pageIdx, evPt.x);
 
   const s = evPt.sample;
   const d = new Date(s[0]*1000);

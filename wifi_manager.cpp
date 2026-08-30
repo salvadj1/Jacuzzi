@@ -26,6 +26,7 @@ static bool routesRegistered = false; // las rutas solo se registran una vez, au
 static unsigned long apOpenedAt = 0;
 static unsigned long lastReconnectAttempt = 0;
 static uint8_t failedReconnectAttempts = 0; // crece con cada intento fallido, para el backoff
+static uint16_t totalReconnects = 0;        // reconexiones logradas desde el arranque (diagnostico)
 
 // Modo de conexion elegido por el usuario (persistido en NVS):
 // 0 = usar redes wifi disponibles, 1 = AP permanente. Ver storage.h.
@@ -412,6 +413,10 @@ void loopWifi() {
   if (wifiMode == WIFI_MODE_AP_PERMANENT) return; // no se intenta STA en este modo
 
   if (WiFi.status() == WL_CONNECTED) {
+    // Solo cuenta como "reconexion" si veniamos reintentando (habia
+    // intentos fallidos acumulados); la primera conexion tras el
+    // arranque no es una reconexion.
+    if (failedReconnectAttempts > 0) totalReconnects++;
     failedReconnectAttempts = 0; // conectados: se reinicia el backoff para la proxima vez que se caiga
     return;
   }
@@ -461,6 +466,10 @@ bool wifiRequestIsFromAp(AsyncWebServerRequest *request) {
 
 void wifiSendConfigPage(AsyncWebServerRequest *request) {
   request->send_P(200, "text/html", CONFIG_PAGE);
+}
+
+uint16_t wifiReconnectCount() {
+  return totalReconnects;
 }
 
 bool wifiIsConnected() {

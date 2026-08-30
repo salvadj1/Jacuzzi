@@ -22,17 +22,56 @@
 #pragma once
 #include <Arduino.h>
 
-// Una muestra de diagnostico (16 bytes, sin padding gracias a "packed")
+// Una muestra de diagnostico (32 bytes, sin padding gracias a "packed").
+// Nota: al crecer la estructura, el historico guardado en NVS con el
+// tamaño antiguo se descarta solo (ver diaglogInit): no hace falta migrar.
 struct __attribute__((packed)) DiagEntry {
   uint32_t timestamp;     // Epoch (segundos), 0 = aun sin hora sincronizada
   uint32_t freeHeap;      // Heap libre en el momento de la muestra (bytes)
   uint32_t minFreeHeap;   // Heap libre minimo historico desde el arranque (bytes)
+  uint32_t maxAllocHeap;  // Mayor bloque asignable de un tiron (ESP.getMaxAllocHeap).
+                          // Si es mucho menor que freeHeap, el heap esta fragmentado
+                          // y un malloc grande puede fallar aunque "haya heap libre".
   uint32_t uptimeSec;     // Segundos desde el ultimo arranque
+  uint32_t maxLoopMicros; // Duracion de la vuelta de loop() mas lenta desde la
+                          // muestra anterior (microsegundos). Picos altos anticipan
+                          // un reinicio por watchdog (algo bloqueo el loop).
+  uint32_t minStackBytes; // Stack libre minimo de la tarea principal desde el
+                          // arranque (uxTaskGetStackHighWaterMark). Cerca de 0 =
+                          // riesgo de stack overflow (crash dificil de explicar).
   int8_t   rssi;          // Nivel de señal WiFi (dBm), 0 si no aplica
   uint8_t  wsClients;     // Clientes WebSocket conectados en ese momento
   uint8_t  wifiConnected; // 1 = conectado a red domestica, 0 = no
   uint8_t  resetReason;   // Motivo de arranque (esp_reset_reason_t), solo valido en la muestra de arranque
+  uint8_t  breadcrumb;    // Ultima "zona" del loop() en marcha antes de este reset
+                          // (ver DiagStage). Solo tiene sentido en la muestra de
+                          // arranque tras un PANIC/watchdog/brownout.
+  uint16_t wifiReconnects;// Reconexiones WiFi acumuladas desde el arranque
+  uint16_t ntcErrors;     // Lecturas NTC fuera de rango/sensor desconectado, acumuladas
 };
+
+// Zonas del loop() que se marcan como "en curso" justo antes de ejecutar
+// cada modulo, para saber donde se quedo colgado el firmware si el
+// siguiente arranque es por PANIC/watchdog. Guardado en memoria RTC
+// (sobrevive a resets por SW/panic/watchdog, no a un corte de alimentacion).
+enum DiagStage : uint8_t {
+  DIAG_STAGE_BOOT = 0,
+  DIAG_STAGE_LOOP_WIFI,
+  DIAG_STAGE_OTA,
+  DIAG_STAGE_TEMP_SENSORS,
+  DIAG_STAGE_SCHEDULE,
+  DIAG_STAGE_DATALOG,
+  DIAG_STAGE_WEBSERVER,
+  DIAG_STAGE_DIAGLOG,
+  DIAG_STAGE_BROADCAST,
+};
+
+// Marca la zona actual del loop() (ver DiagStage). Muy barato (escribe un
+// byte en RTC RAM), llamar antes de cada modulo dentro de loop().
+void diaglogSetStage(uint8_t stage);
+
+// Texto legible de una zona (para mostrar el breadcrumb en la web).
+const char* diaglogStageText(uint8_t stage);
 
 // Capacidad total del buffer circular.
 #define DIAG_LOG_CAPACITY_ENTRIES DIAG_LOG_CAPACITY
@@ -43,10 +82,22 @@ struct __attribute__((packed)) DiagEntry {
 void diaglogInit();
 
 // Logica periodica: añade una muestra si ha pasado el intervalo
-// configurado. "wsClients" se pasa desde fuera porque el conteo de
-// clientes WebSocket vive en web_server.cpp. Llamar en cada vuelta del
-// loop() principal.
-void diaglogLoop(uint8_t wsClients);
+// configurado, y en ese caso resetea el pico de duracion de loop() para
+// medir el siguiente periodo desde cero. Los contadores acumulados
+// (wifiReconnects/ntcErrors) se piden a otros modulos por parametro para
+// no crear dependencias cruzadas de includes.
+//   wsClients      -> web_server.cpp (wsClientCount())
+//   wifiReconnects -> wifi_manager.cpp (wifiReconnectCount())
+//   ntcErrors      -> temp_sensors.cpp (ntcErrorCount())
+// Llamar en cada vuelta del loop() principal.
+void diaglogLoop(uint8_t wsClients, uint16_t wifiReconnects, uint16_t ntcErrors);
+
+// Registra la duracion (en microsegundos) de la vuelta de loop() que
+// acaba de terminar, actualizando el pico si es mayor que el anterior.
+// Reutilizable: no depende de nada del proyecto, solo guarda un maximo.
+// Llamar UNA vez por vuelta de loop(), lo antes posible tras medir con
+// micros() al principio y al final de loop().
+void diaglogRecordLoopDuration(uint32_t micros_duration);
 
 // Numero de muestras validas actualmente en el buffer.
 int diaglogCount();

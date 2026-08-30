@@ -38,6 +38,13 @@
 #define NTC_SERIES_OHM      10000.0f  // Resistencia fija del divisor de tension
 #define NTC_ADC_SAMPLES           16   // Muestras promediadas por lectura (reduce ruido)
 
+// Rango fisico plausible y limites de saturacion del ADC para detectar
+// sonda desconectada/cortocircuitada (diagnostico, no afecta al control).
+#define NTC_TEMP_MIN_C           -10.0f
+#define NTC_TEMP_MAX_C           110.0f
+#define NTC_ADC_SATURATION_LOW      20   // ADC casi a 0 -> probable cortocircuito/cable a GND
+#define NTC_ADC_SATURATION_HIGH   4075   // ADC casi a 4095 -> probable sonda desconectada
+
 // ---------------- Pines del modulo de 4 reles ----------------
 #define PIN_RELAY_MOTOR           4   // Rele 1: bomba/motor de circulacion
 #define PIN_DE_AMBAS_VALVULAS    17   // Rele 2: mueve las dos valvulas a la vez.

@@ -108,6 +108,9 @@ void setup() {
 }
 
 void loop() {
+  uint32_t loopStartUs = micros();
+
+  diaglogSetStage(DIAG_STAGE_LOOP_WIFI);
   loopWifi();
 
   // OTA y la sincronizacion horaria (NTP) solo tienen sentido una vez
@@ -124,19 +127,31 @@ void loop() {
       otaStarted = true;
       Serial.println("[MAIN] OTA lista. El dispositivo es visible en la red como jacuzzi-esp32.");
     }
+    diaglogSetStage(DIAG_STAGE_OTA);
     loopOta();
   }
 
+  diaglogSetStage(DIAG_STAGE_TEMP_SENSORS);
   loopTempSensors();
+
+  diaglogSetStage(DIAG_STAGE_SCHEDULE);
   loopSchedule();
+
+  diaglogSetStage(DIAG_STAGE_DATALOG);
   datalogLoop();
+
+  diaglogSetStage(DIAG_STAGE_WEBSERVER);
   webServerLoop();               // purga clientes WebSocket desconectados
-  diaglogLoop(wsClientCount());  // registro de diagnostico (heap, wifi, clientes...)
+
+  diaglogSetStage(DIAG_STAGE_DIAGLOG);
+  diaglogLoop(wsClientCount(), wifiReconnectCount(), ntcErrorCount()); // registro de diagnostico
 
   if (millis() - lastBroadcast > BROADCAST_MS) {
+    diaglogSetStage(DIAG_STAGE_BROADCAST);
     lastBroadcast = millis();
     broadcastState();
   }
 
+  diaglogRecordLoopDuration(micros() - loopStartUs); // pico de duracion de esta vuelta
   esp_task_wdt_reset(); // "alimenta" el watchdog: confirma que el loop sigue vivo
 }

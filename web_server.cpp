@@ -203,6 +203,19 @@ void webServerBegin() {
     request->send(200, "application/json", datalogToJson());
   });
 
+  // Borra un dia completo del historico (boton por dia en "/datos").
+  // Parametros de query: from/to = epoch en segundos, rango [from,to).
+  server.on("/api/history/deleteday", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("from") || !request->hasParam("to")) {
+      request->send(400, "application/json", "{\"ok\":false,\"error\":\"faltan parametros from/to\"}");
+      return;
+    }
+    uint32_t from = (uint32_t)request->getParam("from")->value().toInt();
+    uint32_t to   = (uint32_t)request->getParam("to")->value().toInt();
+    datalogDeleteRange(from, to);
+    request->send(200, "application/json", "{\"ok\":true}");
+  });
+
   // Pagina de diagnostico (heap, WiFi, clientes, motivos de reinicio)
   server.on("/diag", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, "text/html", DIAG_HTML);

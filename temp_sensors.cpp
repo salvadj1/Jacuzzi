@@ -16,6 +16,7 @@
 #include <math.h>
 
 static unsigned long lastReadMs = 0;
+static uint16_t ntcErrors = 0; // lecturas fuera de rango o con ADC saturado (diagnostico)
 
 // Media movil para suavizar oscilaciones de temperatura mostrada
 #define TEMP_AVG_SAMPLES 10
@@ -45,6 +46,11 @@ float readNtcCelsius(uint8_t pin) {
     delayMicroseconds(200); // pequeño espaciado entre muestras para promediar mejor
   }
   float adcAvg = (float)sum / NTC_ADC_SAMPLES;
+
+  // ADC pegado a un extremo = sonda desconectada o cortocircuitada; se
+  // cuenta como error de diagnostico (el cableado hay que revisarlo),
+  // pero se sigue calculando algo razonable para no romper el control.
+  bool adcSaturado = (adcAvg <= NTC_ADC_SATURATION_LOW) || (adcAvg >= NTC_ADC_SATURATION_HIGH);
   if (adcAvg <= 0) adcAvg = 1; // evita division por cero si el cable esta suelto
 
   // Voltaje en el nodo intermedio del divisor (escala 0-4095 -> 0-3.3V)
@@ -58,8 +64,17 @@ float readNtcCelsius(uint8_t pin) {
   float t0Kelvin = NTC_NOMINAL_TEMP_C + 273.15f;
   float invT = (1.0f / t0Kelvin) + (1.0f / NTC_BETA) * log(rNtc / NTC_NOMINAL_OHM);
   float tempKelvin = 1.0f / invT;
+  float tempC = tempKelvin - 273.15f;
 
-  return tempKelvin - 273.15f;
+  if (adcSaturado || tempC < NTC_TEMP_MIN_C || tempC > NTC_TEMP_MAX_C) {
+    if (ntcErrors < 65535) ntcErrors++;
+  }
+
+  return tempC;
+}
+
+uint16_t ntcErrorCount() {
+  return ntcErrors;
 }
 
 void loopTempSensors() {

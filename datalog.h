@@ -62,3 +62,9 @@ LogEntry datalogGet(int index);
 // directamente en la respuesta HTTP (evita construir una String gigante
 // en memoria).
 String datalogToJson();
+
+// Borra todas las muestras cuyo timestamp cae en [fromTs, toTs) (pensado
+// para borrar un dia completo desde la web, boton por dia en "/datos") y
+// compacta el resto. Operacion puntual bajo demanda -no se llama desde
+// el loop()-, reescribe el historico completo en NVS.
+void datalogDeleteRange(uint32_t fromTs, uint32_t toTs);

@@ -43,6 +43,11 @@ void wifiActivateConfigAp();
 // Indica si el ESP32 esta conectado a una red WiFi como cliente (STA)
 bool wifiIsConnected();
 
+// Numero de reconexiones STA logradas desde el arranque (se pierde la
+// conexion y luego se recupera). Sirve para diagnostico: una red que
+// "va bien pero se corta" muestra este contador subiendo sin parar.
+uint16_t wifiReconnectCount();
+
 // Indica si el punto de acceso de configuracion esta activo ahora mismo
 bool wifiIsApActive();
 

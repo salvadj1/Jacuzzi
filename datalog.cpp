@@ -140,3 +140,41 @@ String datalogToJson() {
   out += "]}";
   return out;
 }
+
+// Buffer temporal estatico para compactar el historico al borrar un
+// rango. Estatico en vez de malloc/new a proposito: es una operacion
+// bajo demanda (poco frecuente) y asi no fragmenta el heap ni compite
+// con el resto del firmware por memoria dinamica.
+static LogEntry g_logTmp[LOG_CAPACITY];
+
+// Borra todas las muestras cuyo timestamp cae en [fromTs, toTs) y
+// compacta el resto al principio del buffer, reescribiendo todo el
+// historico en NVS. Pensado para el boton "borrar este dia" de la web.
+void datalogDeleteRange(uint32_t fromTs, uint32_t toTs) {
+  int n = g_count;
+  int kept = 0;
+  for (int i = 0; i < n; i++) {
+    LogEntry e = datalogGet(i);
+    if (e.timestamp < fromTs || e.timestamp >= toTs) {
+      g_logTmp[kept++] = e;
+    }
+  }
+
+  memset(g_log, 0, sizeof(g_log));
+  memcpy(g_log, g_logTmp, kept * sizeof(LogEntry));
+  // Buffer recien compactado: nunca ha "dado la vuelta", asi que el
+  // criterio es el mismo que en datalogGet() para ese caso (head=count).
+  g_count = kept;
+  g_head  = kept % LOG_CAPACITY;
+
+  prefsLog.begin("datalog", false);
+  prefsLog.putUShort("head", g_head);
+  prefsLog.putUShort("count", g_count);
+  for (int chunk = 0; chunk < LOG_NUM_CHUNKS; chunk++) {
+    String key = "c" + String(chunk);
+    prefsLog.putBytes(key.c_str(), &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+  }
+  prefsLog.end();
+
+  Serial.printf("[DATALOG] Borradas muestras del rango [%u,%u); quedan %d\n", fromTs, toTs, g_count);
+}

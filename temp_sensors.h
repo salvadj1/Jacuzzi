@@ -25,6 +25,12 @@ void setupTempSensors();
 // Llamar en cada vuelta del loop() principal.
 void loopTempSensors();
 
+// Lecturas NTC descartadas por estar fuera de rango fisico plausible o
+// por ADC en el limite (sensor desconectado/cortocircuito), acumuladas
+// desde el arranque. Sirve para detectar un cable suelto o una sonda
+// deteriorada antes de que arruine el modo automatico.
+uint16_t ntcErrorCount();
+
 // Lee un NTC concreto (promediando NTC_ADC_SAMPLES muestras) y devuelve
 // la temperatura en grados Celsius. Reutilizable para añadir mas NTC en
 // el futuro sin duplicar codigo.
