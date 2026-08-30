@@ -213,6 +213,12 @@ void webServerBegin() {
     request->send(200, "application/json", diaglogToJson());
   });
 
+  // Borra el historico de diagnostico (boton "BORRAR REGISTROS" en /diag)
+  server.on("/api/diag/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+    diaglogClear();
+    request->send(200, "application/json", "{\"ok\":true}");
+  });
+
   server.begin();
   Serial.println("[WEB] Servidor listo (accesible por la IP que tenga asignada en cada momento)");
 }

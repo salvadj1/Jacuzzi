@@ -51,6 +51,11 @@ void diaglogLoop(uint8_t wsClients);
 // Numero de muestras validas actualmente en el buffer.
 int diaglogCount();
 
+// Borra todo el historico (RAM + NVS). Deja el buffer como recien
+// arrancado (head=count=0); no borra la muestra de arranque actual, asi
+// que tras borrar puede volver a crecer con la siguiente diaglogLoop().
+void diaglogClear();
+
 // Devuelve la muestra "index" en orden cronologico (0 = la mas antigua).
 DiagEntry diaglogGet(int index);
 

@@ -92,6 +92,21 @@ int diaglogCount() {
   return g_count;
 }
 
+// Borra todo el historico: resetea cabecera y buffer en RAM, y limpia
+// por completo el namespace NVS "diaglog" (mas simple y fiable que
+// regrabar cada chunk a cero).
+void diaglogClear() {
+  g_head  = 0;
+  g_count = 0;
+  memset(g_diag, 0, sizeof(g_diag));
+
+  prefsDiag.begin("diaglog", false);
+  prefsDiag.clear();
+  prefsDiag.end();
+
+  Serial.println("[DIAG] Historico de diagnostico borrado");
+}
+
 DiagEntry diaglogGet(int index) {
   int physical;
   if (g_count < DIAG_LOG_CAPACITY_ENTRIES) {

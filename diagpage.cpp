@@ -52,6 +52,7 @@ tr.evento td{color:var(--amber);font-weight:700;}
     <span class="links">
       <a class="back" href="/datos">&larr; HISTORICO</a>
       <a class="back" href="/">INICIO</a>
+      <a class="back" id="btnBorrar" href="#" style="color:var(--red);border-color:var(--red);">BORRAR REGISTROS</a>
     </span>
   </h1>
 
@@ -73,11 +74,15 @@ tr.evento td{color:var(--amber);font-weight:700;}
 </div>
 
 <script>
+// IMPORTANTE: estos indices deben coincidir exactamente con el enum
+// esp_reset_reason_t de ESP-IDF (ver esp_system.h). Antes estaba
+// desplazado un puesto y mezclaba, por ejemplo, brownout con "salida de
+// deep sleep".
 const MOTIVOS = {
-  0:'', 1:'Encendido normal', 2:'Reset externo', 3:'Reinicio por software',
-  4:'PANIC (crash)', 5:'Watchdog interno', 6:'Watchdog no confirmado',
-  7:'Watchdog de tarea', 8:'Otro watchdog', 9:'Salida deep sleep',
-  10:'Brownout', 11:'Reset via SDIO'
+  0:'Desconocido', 1:'Encendido normal', 2:'Reset externo', 3:'Reinicio por software',
+  4:'PANIC (crash)', 5:'Watchdog interno', 6:'Watchdog de tarea',
+  7:'Otro watchdog', 8:'Salida deep sleep', 9:'Brownout',
+  10:'Reset via SDIO'
 };
 
 function fmtUptime(sec){
@@ -145,6 +150,20 @@ async function loadData(){
     cuerpo.appendChild(tr);
   }
 }
+
+// Borra el historico de diagnostico en el ESP32 (con confirmacion, ya
+// que no se puede deshacer) y recarga la tabla al terminar.
+document.getElementById('btnBorrar').addEventListener('click', async (ev) => {
+  ev.preventDefault();
+  if (!confirm('¿Borrar todo el historico de diagnostico? Esta accion no se puede deshacer.')) return;
+  try {
+    await fetch('/api/diag/clear', { method: 'POST' });
+  } catch (e) {
+    alert('Error al borrar el historico.');
+    return;
+  }
+  loadData();
+});
 
 loadData();
 setInterval(loadData, 60000);
