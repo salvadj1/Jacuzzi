@@ -117,3 +117,17 @@ String diaglogToJson();
 // Texto legible del motivo de reset (para mostrar en la web sin tener
 // que traducir el codigo numerico en el navegador).
 const char* diaglogResetReasonText(uint8_t reason);
+
+// ---------------- Intervalo de muestreo ajustable ----------------
+// Limites permitidos para el slider de la web (minutos).
+#define DIAG_INTERVAL_MIN_MINUTES 1
+#define DIAG_INTERVAL_MAX_MINUTES 30
+
+// Devuelve el intervalo de muestreo actual, en milisegundos. Por defecto
+// es DIAG_SAMPLE_INTERVAL_MS (config.h), pero puede haberse cambiado en
+// caliente desde la web y quedar guardado en NVS.
+uint32_t diaglogGetIntervalMs();
+
+// Cambia el intervalo de muestreo (milisegundos), lo satura a los
+// limites de arriba y lo persiste en NVS para que sobreviva a reinicios.
+void diaglogSetIntervalMs(uint32_t ms);

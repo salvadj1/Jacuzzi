@@ -240,6 +240,18 @@ void webServerBegin() {
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
+  // Cambia el intervalo de muestreo de diagnostico (slider en /diag).
+  // Parametro "ms" en la query string, en milisegundos.
+  server.on("/api/diag/interval", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("ms")) {
+      request->send(400, "application/json", "{\"ok\":false,\"error\":\"falta parametro ms\"}");
+      return;
+    }
+    uint32_t ms = (uint32_t)request->getParam("ms")->value().toInt();
+    diaglogSetIntervalMs(ms);
+    request->send(200, "application/json", "{\"ok\":true,\"intervalMs\":" + String(diaglogGetIntervalMs()) + "}");
+  });
+
   server.begin();
   Serial.println("[WEB] Servidor listo (accesible por la IP que tenga asignada en cada momento)");
 }

@@ -53,6 +53,14 @@ td{padding:6px 6px;border-bottom:1px solid #1b2622;white-space:nowrap;}
 tr.evento td{color:var(--amber);font-weight:700;}
 .tabla-scroll{max-height:55vh;overflow-y:auto;}
 #emptyMsg{color:var(--dim);font-size:12px;text-align:center;padding:30px 10px;}
+.minigraficas{display:flex;gap:10px;flex-wrap:wrap;}
+.minigrafica{flex:1;min-width:220px;}
+.minigrafica canvas{height:70px !important;}
+.minigrafica .chart-wrap canvas{display:block;width:100%;}
+.slider-row{display:flex;align-items:center;gap:12px;}
+.slider-row input[type=range]{flex:1;accent-color:var(--amber);}
+.slider-val{font-size:13px;color:var(--amber);font-weight:700;min-width:52px;text-align:right;}
+.sub-nota{font-size:10px;color:var(--dim);margin-top:6px;}
 </style>
 </head>
 <body>
@@ -71,6 +79,31 @@ tr.evento td{color:var(--amber);font-weight:700;}
   <div class="panel">
     <h2>Heap libre en el tiempo</h2>
     <div class="chart-wrap"><canvas id="heapChart"></canvas></div>
+  </div>
+
+  <div class="panel minigraficas">
+    <div class="minigrafica">
+      <h2>Stack libre minimo</h2>
+      <div class="chart-wrap"><canvas id="stackChart"></canvas></div>
+    </div>
+    <div class="minigrafica">
+      <h2>Loop mas lento por muestra</h2>
+      <div class="chart-wrap"><canvas id="loopChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panelReinicios" style="display:none;">
+    <h2>Uptime alcanzado antes de cada reinicio no normal</h2>
+    <div class="chart-wrap"><canvas id="resetChart"></canvas></div>
+  </div>
+
+  <div class="panel">
+    <h2>Frecuencia de registro</h2>
+    <div class="slider-row">
+      <input type="range" id="sliderIntervalo" min="1" max="30" step="1" value="5">
+      <span id="lblIntervalo" class="slider-val">5 min</span>
+    </div>
+    <div class="sub-nota">Mas frecuente = historico mas detallado pero cubre menos tiempo (buffer de tamaño fijo).</div>
   </div>
 
   <div class="panel">
@@ -134,33 +167,34 @@ function motivoTexto(s){
   return (esEvento && crumb) ? (base+' — en: '+crumb) : base;
 }
 
-// Dibuja la curva de heap libre en el tiempo. Sin zoom ni ejes
-// interactivos (a diferencia de datapage.cpp): aqui solo interesa ver
-// de un vistazo si hay una fuga de memoria (pendiente descendente).
-function drawHeapChart(canvas, samples){
+// Dibuja una curva generica (heap, stack, loop...) en el tiempo. Sin zoom
+// ni ejes interactivos (a diferencia de datapage.cpp): aqui solo interesa
+// ver de un vistazo la tendencia (p.ej. una fuga de memoria = pendiente
+// descendente). Reutilizable: recibe los valores ya extraidos y el color
+// de trazo, no depende de que columna sea.
+function drawLineChart(canvas, values, strokeColorVar, height){
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.parentElement.clientWidth;
-  const H = 120;
+  const H = height || 120;
   canvas.width = W*dpr; canvas.height = H*dpr;
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.clearRect(0,0,W,H);
 
-  if(samples.length < 2){
+  if(values.length < 2){
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--dim');
     ctx.font = '11px monospace';
     ctx.fillText('Datos insuficientes todavia', 10, H/2);
     return;
   }
 
-  const heapVals = samples.map(s => s[IDX.freeHeap]);
-  const maxV = Math.max(...heapVals) * 1.05;
-  const minV = Math.min(...heapVals) * 0.95;
+  const maxV = Math.max(...values) * 1.05;
+  const minV = Math.min(...values) * 0.95;
   const range = Math.max(maxV - minV, 1);
   const padL = 4, padR = 4, padT = 6, padB = 6;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
-  const x = i => padL + (i/(samples.length-1)) * plotW;
+  const x = i => padL + (i/(values.length-1)) * plotW;
   const y = v => padT + plotH - ((v-minV)/range) * plotH;
 
   // Linea guia horizontal en el minimo (para ver rapido el peor momento)
@@ -171,11 +205,45 @@ function drawHeapChart(canvas, samples){
   ctx.lineTo(W-padR, y(minV));
   ctx.stroke();
 
-  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--water');
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  heapVals.forEach((v,i) => { const px=x(i), py=y(v); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); });
+  values.forEach((v,i) => { const px=x(i), py=y(v); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); });
   ctx.stroke();
+}
+
+// Dibuja barras con el uptime alcanzado justo antes de cada reinicio "no
+// normal" (todo lo que no sea encendido con corriente). Ayuda a ver de un
+// vistazo si los reinicios se agrupan (siempre a las pocas horas = algo se
+// degrada rapido) o son esporadicos (posible causa externa puntual).
+function drawResetBars(canvas, uptimes){
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const H = 90;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0,0,W,H);
+
+  if(uptimes.length === 0){
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--dim');
+    ctx.font = '11px monospace';
+    ctx.fillText('Sin reinicios no normales registrados', 10, H/2);
+    return;
+  }
+
+  const maxV = Math.max(...uptimes) * 1.1 || 1;
+  const padL = 4, padR = 4, padT = 6, padB = 6;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const barGap = 4;
+  const barW = Math.max((plotW - barGap*(uptimes.length-1)) / uptimes.length, 2);
+
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--red');
+  uptimes.forEach((v,i) => {
+    const h = (v/maxV) * plotH;
+    const px = padL + i*(barW+barGap);
+    ctx.fillRect(px, padT+plotH-h, barW, h);
+  });
 }
 
 async function loadData(){
@@ -190,6 +258,14 @@ async function loadData(){
   const tDiag = document.getElementById('tablaDiag');
   const empty = document.getElementById('emptyMsg');
 
+  // Sincroniza el slider con el intervalo real que tiene el ESP32 (puede
+  // no coincidir con lo que se ve si se cambio desde otra pestaña/movil).
+  if(data.intervalMs && !g_sliderTocado){
+    const mins = Math.round(data.intervalMs/60000);
+    sliderIntervalo.value = mins;
+    lblIntervalo.textContent = mins+' min';
+  }
+
   if(samples.length === 0){
     empty.style.display = 'block';
     tDiag.style.display = 'none';
@@ -199,11 +275,18 @@ async function loadData(){
   empty.style.display = 'none';
   tDiag.style.display = 'table';
 
-  drawHeapChart(document.getElementById('heapChart'), samples);
+  drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120);
+  drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70);
+  drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70);
+
+  // Reinicios no normales: uptime alcanzado justo antes de cada uno
+  const eventos = samples.filter(s => s[IDX.resetReason] && s[IDX.resetReason] !== 1);
+  document.getElementById('panelReinicios').style.display = eventos.length ? 'block' : 'none';
+  if(eventos.length) drawResetBars(document.getElementById('resetChart'), eventos.map(s=>s[IDX.uptime]));
 
   // Resumen: ultima muestra + numero de arranques detectados en el historico
   const last = samples[samples.length-1];
-  const arranques = samples.filter(s => s[IDX.resetReason] && s[IDX.resetReason] !== 1).length;
+  const arranques = eventos.length;
 
   const heapClass = last[IDX.freeHeap] < 20000 ? 'bad' : (last[IDX.freeHeap] < 40000 ? 'warn' : 'ok');
 
@@ -222,7 +305,7 @@ async function loadData(){
     '<div class="tarjeta"><div class="lbl">HEAP MAX. ASIGNABLE</div><div class="val '+fragClass+'">'+fmtHeap(last[IDX.maxAllocHeap])+'</div><div class="sub">bloque mas grande de un tiron</div></div>'+
     '<div class="tarjeta"><div class="lbl">HEAP MINIMO HISTORICO</div><div class="val">'+fmtHeap(last[IDX.minFreeHeap])+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">STACK LIBRE MINIMO</div><div class="val '+stackClass+'">'+fmtStack(last[IDX.stackMin])+'</div></div>'+
-    '<div class="tarjeta"><div class="lbl">LOOP MAS LENTO</div><div class="val '+loopClass+'">'+fmtMicros(last[IDX.loopMax])+'</div><div class="sub">ultimo periodo de 5 min</div></div>'+
+    '<div class="tarjeta"><div class="lbl">LOOP MAS LENTO</div><div class="val '+loopClass+'">'+fmtMicros(last[IDX.loopMax])+'</div><div class="sub">ultimo periodo de '+Math.round((data.intervalMs||300000)/60000)+' min</div></div>'+
     '<div class="tarjeta"><div class="lbl">UPTIME ACTUAL</div><div class="val">'+fmtUptime(last[IDX.uptime])+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">RECONEXIONES WIFI</div><div class="val '+(last[IDX.wifiReconnects]>3?'warn':'ok')+'">'+last[IDX.wifiReconnects]+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">ERRORES SENSOR NTC</div><div class="val '+(last[IDX.ntcErrors]>0?'warn':'ok')+'">'+last[IDX.ntcErrors]+'</div></div>'+
@@ -268,6 +351,26 @@ document.getElementById('btnBorrar').addEventListener('click', async (ev) => {
     return;
   }
   loadData();
+});
+
+// Slider de frecuencia de registro: se envia al ESP32 al soltar (evento
+// "change", no "input") para no saturar de peticiones mientras se arrastra.
+const sliderIntervalo = document.getElementById('sliderIntervalo');
+const lblIntervalo = document.getElementById('lblIntervalo');
+let g_sliderTocado = false;
+
+sliderIntervalo.addEventListener('input', () => {
+  g_sliderTocado = true;
+  lblIntervalo.textContent = sliderIntervalo.value+' min';
+});
+sliderIntervalo.addEventListener('change', async () => {
+  const ms = sliderIntervalo.value * 60000;
+  try{
+    await fetch('/api/diag/interval?ms='+ms, { method:'POST' });
+  }catch(e){
+    alert('No se pudo cambiar el intervalo.');
+  }
+  g_sliderTocado = false;
 });
 
 loadData();

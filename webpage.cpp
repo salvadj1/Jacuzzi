@@ -43,6 +43,31 @@ svg{width:100%;height:auto;display:block;}
 .discharge-bar.on{display:block;}
 .discharge-bar b{color:var(--amber);font-size:13px;letter-spacing:.5px;}
 .minibox .row2{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:10px 0;border-bottom:1px solid #223229;}
+.pillrow{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.pill{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;padding:7px 14px;border-radius:22px;background:#0d2a19;color:#9fe1cb;}
+.pill.bad{background:#2a1512;color:#f0997b;}
+.pill .pilllbl{opacity:.8;}
+.pill b{font-weight:900;}
+.valverow{border-top:1px solid #22332c;padding-top:12px;display:flex;flex-direction:column;gap:10px;}
+.valveitem{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.vlbl{font-size:13px;color:var(--dim);}
+.seg{display:flex;background:#0d1512;border:1px solid var(--line);border-radius:22px;overflow:hidden;}
+.seg .opt{padding:6px 14px;font-size:12px;font-weight:700;color:var(--dim);white-space:nowrap;}
+#segV1 .opt.active{background:var(--green);color:#04342c;}
+#segV2 .opt.active{background:var(--red);color:#fff;}
+.clockprogrow{display:flex;gap:12px;}
+.clockbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;text-align:center;}
+.progbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;}
+.cb-lbl{font-size:11px;color:var(--dim);letter-spacing:.5px;display:flex;align-items:center;justify-content:center;gap:3px;}
+.progbox .cb-lbl{justify-content:flex-start;}
+.cb-time{display:block;font-size:20px;font-weight:900;color:#7fe8ff;margin-top:4px;}
+.cb-date{display:block;font-size:11px;color:var(--dim);}
+.cb-prog{display:block;font-size:14px;font-weight:900;margin:4px 0;}
+.cb-days{display:block;font-size:11px;color:var(--dim);margin-top:3px;}
+.nextbanner{display:flex;justify-content:space-between;align-items:center;background:#1a1408;border:1px solid var(--amber);border-radius:8px;padding:9px 12px;margin-top:10px;}
+.nb-lbl{font-size:11px;color:var(--amber);letter-spacing:.5px;}
+.nb-val{font-size:13px;color:var(--amber);font-weight:900;}
+.gear-icon{width:16px;height:16px;}
 .minibox .row2:last-child{border-bottom:none;}
 .minibox .row2 .cell{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;}
 .minibox .row2 .cell.right{padding-left:14px;}
@@ -111,11 +136,11 @@ svg{width:100%;height:auto;display:block;}
 .dot.g{background:var(--green);box-shadow:0 0 6px var(--green);}
 .dot.r{background:var(--red);}
 .controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
-.opciones-wrap{position:relative;flex:1 1 auto;}
+.opciones-wrap{position:relative;flex:1 1 auto;display:flex;}
 .opciones-wrap>button{width:100%;}
 .dropdown{display:none;position:absolute;top:calc(100% + 4px);right:0;flex-direction:column;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;min-width:140px;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.4);}
 .dropdown.open{display:flex;}
-button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font-family:var(--mono);font-size:10px;letter-spacing:.3px;line-height:1.3;cursor:pointer;white-space:normal;text-align:center;}
+button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font-family:var(--mono);font-size:10px;letter-spacing:.3px;line-height:1.3;cursor:pointer;white-space:normal;text-align:center;display:flex;align-items:center;justify-content:center;}
 button:hover{border-color:var(--amber);color:var(--amber);}
 button.active{border-color:var(--green);color:var(--green);}
 button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var(--dim);}
@@ -201,21 +226,42 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     </div>
 
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
-      <div class="row2">
-        <span class="cell"><span class="lbl">BOMBA</span><b id="statPump">—</b></span>
-        <span class="cell right mode"><span class="lbl">MODO</span><b id="modeText">—</b></span>
+      <div class="pillrow">
+        <span class="pill" id="pillBomba"><span class="pilllbl">BOMBA</span><b id="statPump">—</b></span>
+        <span class="pill" id="pillModo"><span class="pilllbl">MODO</span><b id="modeText">—</b></span>
       </div>
-      <div class="row2">
-        <span class="cell"><span class="lbl">V1</span><b id="statV1">—</b></span>
-        <span class="cell right"><span class="lbl">V2</span><b id="statV2">—</b></span>
+      <div class="valverow">
+        <div class="valveitem">
+          <span class="vlbl">V1 (RUTA AGUA)</span>
+          <span class="seg" id="segV1"><span class="opt" data-v="filtro">FILTRO</span><span class="opt" data-v="serpentin">SERPENTÍN</span></span>
+        </div>
+        <div class="valveitem">
+          <span class="vlbl">V2 (RETORNO)</span>
+          <span class="seg" id="segV2"><span class="opt" data-v="cerrada">CERRADA</span><span class="opt" data-v="abierta">ABIERTA</span></span>
+        </div>
       </div>
     </div>
 
     <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
-      <div class="row clickable" id="clockRow">
-        <span class="lbl">HORA ACTUAL
-          <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        </span><b id="statClock">—</b>
+      <div class="clockprogrow">
+        <div class="clockbox clickable" id="clockRow">
+          <div class="cb-lbl">HORA ACTUAL
+            <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <b class="cb-time" id="statClock">—</b>
+          <span class="cb-date" id="statClockDate">—</span>
+        </div>
+        <div class="progbox clickable" id="progRow">
+          <div class="cb-lbl">PROGRAMA
+            <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <b class="cb-prog" id="progText">—</b>
+          <span class="cb-days" id="progDaysTxt">—</span>
+        </div>
+      </div>
+      <div class="nextbanner" id="nextBanner">
+        <span class="nb-lbl">SIGUIENTE PROGRAMA</span>
+        <b class="nb-val" id="nextProgText">—</b>
       </div>
       <div class="progedit" id="clockEdit">
         <div class="fila">
@@ -225,11 +271,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         <button class="guardar" id="clockGuardar">GUARDAR</button>
       </div>
 
-      <div class="row clickable" id="progRow">
-        <span class="lbl">PROGRAMA
-          <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        </span><b id="progText">—</b>
-      </div>
       <div class="progedit" id="progEdit">
         <div class="fila">
           Inicio <input type="time" id="progStart">
@@ -238,8 +279,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         <div class="fila dias" id="progDias"></div>
         <button class="guardar" id="progGuardar">GUARDAR</button>
       </div>
-
-      <div class="row"><span class="lbl">SIGUIENTE PROGRAMA</span><b id="nextProgText">—</b></div>
     </div>
   </foreignObject>
 
@@ -392,8 +431,12 @@ function render(){
   el('offT1Val').textContent = (state.offsetT1>=0?'+':'')+state.offsetT1.toFixed(1)+' °C';
   el('offT2Val').textContent = (state.offsetT2>=0?'+':'')+state.offsetT2.toFixed(1)+' °C';
   el('statPump').textContent = state.pumpOn ? 'ON' : 'OFF';
-  el('statV1').textContent = state.valvulasActivas ? 'DESVÍA (SERPENTÍN)' : 'RECTO (FILTRO)';
-  el('statV2').textContent = state.valvulasActivas ? 'ABIERTA (RETORNO)' : 'CERRADA';
+  el('pillBomba').classList.toggle('bad', !state.pumpOn);
+
+  el('segV1').querySelector('[data-v="filtro"]').classList.toggle('active', !state.valvulasActivas);
+  el('segV1').querySelector('[data-v="serpentin"]').classList.toggle('active', state.valvulasActivas);
+  el('segV2').querySelector('[data-v="cerrada"]').classList.toggle('active', !state.valvulasActivas);
+  el('segV2').querySelector('[data-v="abierta"]').classList.toggle('active', state.valvulasActivas);
 
   applyValve('valve1', !state.valvulasActivas);
   applyValve('valve2', state.valvulasActivas);
@@ -424,6 +467,7 @@ function render(){
   }
   if(state.dischargeActive) modeLabel = 'DESCARGA SOLAR';
   el('modeText').textContent = modeLabel;
+  el('pillModo').classList.toggle('bad', !state.pumpOn && !state.dischargeActive);
 
   // Cuenta atras de la descarga forzada del serpentin solar (ventana de 5 min)
   el('dischargeBar').classList.toggle('on', !!state.dischargeActive);
@@ -459,11 +503,12 @@ function renderSchedule(){
 
   {
     const now = estimatedNow();
-    el('statClock').textContent = now.toLocaleTimeString('es-ES') + ' - ' + now.toLocaleDateString('es-ES');
+    el('statClock').textContent = now.toLocaleTimeString('es-ES');
+    el('statClockDate').textContent = now.toLocaleDateString('es-ES');
   }
   const diasTxt = s.days.map((on,i)=> on ? DIAS_LBL[i] : null).filter(Boolean).join(' ');
-  el('progText').textContent =
-    `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)} · ${diasTxt}`;
+  el('progText').textContent = `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)}`;
+  el('progDaysTxt').textContent = diasTxt;
 
   if(state.nextStart > 0){
     const next = new Date(state.nextStart*1000);

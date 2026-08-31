@@ -36,6 +36,10 @@ static uint16_t g_count = 0;
 
 static unsigned long g_lastSampleMillis = 0;
 
+// Intervalo de muestreo actual (arranca con el valor de config.h hasta
+// que diaglogInit() lo sobreescriba con lo guardado en NVS, si lo hay).
+static uint32_t g_intervalMs = DIAG_SAMPLE_INTERVAL_MS;
+
 static void persistChunk(uint16_t physicalIndex) {
   int chunk = physicalIndex / DIAG_CHUNK_ENTRIES;
   prefsDiag.begin("diaglog", false);
@@ -83,6 +87,7 @@ void diaglogInit() {
   prefsDiag.begin("diaglog", true);
   g_head  = prefsDiag.getUShort("head", 0);
   g_count = prefsDiag.getUShort("count", 0);
+  g_intervalMs = prefsDiag.getUInt("intervalMs", DIAG_SAMPLE_INTERVAL_MS);
   for (int chunk = 0; chunk < DIAG_NUM_CHUNKS; chunk++) {
     String key = "c" + String(chunk);
     size_t expected = DIAG_CHUNK_ENTRIES * sizeof(DiagEntry);
@@ -118,8 +123,26 @@ void diaglogInit() {
 }
 
 void diaglogLoop(uint8_t wsClients, uint16_t wifiReconnects, uint16_t ntcErrors) {
-  if (millis() - g_lastSampleMillis < DIAG_SAMPLE_INTERVAL_MS) return;
+  if (millis() - g_lastSampleMillis < g_intervalMs) return;
   addEntry(wsClients, 0, DIAG_STAGE_BOOT, wifiReconnects, ntcErrors);
+}
+
+uint32_t diaglogGetIntervalMs() {
+  return g_intervalMs;
+}
+
+void diaglogSetIntervalMs(uint32_t ms) {
+  uint32_t minMs = DIAG_INTERVAL_MIN_MINUTES * 60UL * 1000UL;
+  uint32_t maxMs = DIAG_INTERVAL_MAX_MINUTES * 60UL * 1000UL;
+  if (ms < minMs) ms = minMs;
+  if (ms > maxMs) ms = maxMs;
+  g_intervalMs = ms;
+
+  prefsDiag.begin("diaglog", false);
+  prefsDiag.putUInt("intervalMs", g_intervalMs);
+  prefsDiag.end();
+
+  Serial.printf("[DIAG] Intervalo de muestreo cambiado a %u ms\n", g_intervalMs);
 }
 
 void diaglogRecordLoopDuration(uint32_t micros_duration) {
@@ -181,8 +204,10 @@ DiagEntry diaglogGet(int index) {
 String diaglogToJson() {
   int n = diaglogCount();
   String out;
-  out.reserve(n * 80 + 16);
-  out += "{\"samples\":[";
+  out.reserve(n * 80 + 32);
+  out += "{\"intervalMs\":";
+  out += diaglogGetIntervalMs();
+  out += ",\"samples\":[";
   for (int i = 0; i < n; i++) {
     DiagEntry e = diaglogGet(i);
     if (i > 0) out += ',';
