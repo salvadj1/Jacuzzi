@@ -36,8 +36,12 @@ static void persistChunk(uint16_t physicalIndex) {
   prefsLog.begin("datalog", false);
   prefsLog.putUShort("head", g_head);
   prefsLog.putUShort("count", g_count);
-  String key = "c" + String(chunk);
-  prefsLog.putBytes(key.c_str(), &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+  // Clave fija en stack (sin String): esto se llama en cada muestra
+  // (cada 15 min o en cada cambio de estado), y usar String aqui iba
+  // fragmentando el heap con el tiempo hasta provocar un panic.
+  char key[4];
+  snprintf(key, sizeof(key), "c%d", chunk);
+  prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
   prefsLog.end();
 }
 
@@ -171,8 +175,9 @@ void datalogDeleteRange(uint32_t fromTs, uint32_t toTs) {
   prefsLog.putUShort("head", g_head);
   prefsLog.putUShort("count", g_count);
   for (int chunk = 0; chunk < LOG_NUM_CHUNKS; chunk++) {
-    String key = "c" + String(chunk);
-    prefsLog.putBytes(key.c_str(), &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+    char key[4];
+    snprintf(key, sizeof(key), "c%d", chunk);
+    prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
   }
   prefsLog.end();
 

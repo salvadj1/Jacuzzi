@@ -96,7 +96,7 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 </head>
 <body>
 <div class="wrap">
-  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" href="/diag">DIAGNOSTICO</a><a class="back" href="/">&larr; VOLVER</a></span></h1>
+  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" href="/">&larr; VOLVER</a></span></h1>
 
   <div class="panel">
     <div class="day-pager" id="pager"></div>
@@ -386,7 +386,11 @@ function buildUI(){
       const label = DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1);
       if (!confirm('¿Borrar todo el registro del '+label+'? Esta accion no se puede deshacer.')) return;
       const fromTs = Math.floor(day.date.getTime()/1000);
-      const toTs = fromTs + 86400;
+      // No sumar 86400 fijo: en el dia de cambio de hora de otono el
+      // dia local dura 25h y ese calculo dejaba la ultima hora sin
+      // borrar. Se calcula la medianoche local del dia siguiente.
+      const nextMidnight = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate()+1);
+      const toTs = Math.floor(nextMidnight.getTime()/1000);
       try {
         await fetch('/api/history/deleteday?from='+fromTs+'&to='+toTs, { method: 'POST' });
       } catch (e) {

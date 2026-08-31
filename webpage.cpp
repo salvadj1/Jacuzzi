@@ -111,6 +111,8 @@ svg{width:100%;height:auto;display:block;}
 .dot.g{background:var(--green);box-shadow:0 0 6px var(--green);}
 .dot.r{background:var(--red);}
 .controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.controls.sub{display:none;margin-top:6px;}
+.controls.sub.open{display:flex;}
 button{flex:1 1 auto;background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font-family:var(--mono);font-size:10px;letter-spacing:.3px;line-height:1;cursor:pointer;white-space:nowrap;}
 button:hover{border-color:var(--amber);color:var(--amber);}
 button.active{border-color:var(--green);color:var(--green);}
@@ -125,8 +127,12 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
   <button id="btnPump">BOMBA MANUAL</button>
   <button id="btnForceSolar">SOLAR</button>
   <button id="btnForceBypass" class="active">FILTRACION</button>
+  <button id="btnOpciones">OPCIONES</button>
+</div>
+<div id="opcionesRow" class="controls sub">
   <button id="btnWifi">WIFI</button>
   <button onclick="location.href='/datos'">DATOS</button>
+  <button onclick="location.href='/diag'">DIAGNOSTICO</button>
   <button id="btnRestart">RESTART</button>
 </div>
 
@@ -574,6 +580,12 @@ el('btnAuto').onclick        = ()=> sendCmd({ cmd:'setAuto', enabled: !state.aut
 el('btnPump').onclick        = ()=> sendCmd({ cmd:'togglePump' });
 el('btnForceSolar').onclick  = ()=> sendCmd({ cmd:'setForceSolar', solar:true });
 el('btnForceBypass').onclick = ()=> sendCmd({ cmd:'setForceSolar', solar:false });
+
+// ---- Desplegable OPCIONES: muestra/oculta WIFI, DATOS, DIAGNOSTICO, RESTART ----
+el('btnOpciones').onclick = ()=>{
+  el('opcionesRow').classList.toggle('open');
+  el('btnOpciones').classList.toggle('active');
+};
 
 // ---- Activar captive portal de configuracion WiFi (sin reiniciar) ----
 // La gestion completa (añadir, priorizar, eliminar redes y guardar+salir

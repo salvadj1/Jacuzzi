@@ -59,9 +59,8 @@ tr.evento td{color:var(--amber);font-weight:700;}
 <div class="wrap">
   <h1>DIAGNOSTICO
     <span class="links">
-      <a class="back" href="/datos">&larr; HISTORICO</a>
-      <a class="back" href="/">INICIO</a>
       <a class="back" id="btnBorrar" href="#" style="color:var(--red);border-color:var(--red);">BORRAR REGISTROS</a>
+      <a class="back" href="/">&larr; VOLVER</a>
     </span>
   </h1>
 

@@ -41,8 +41,11 @@ static void persistChunk(uint16_t physicalIndex) {
   prefsDiag.begin("diaglog", false);
   prefsDiag.putUShort("head", g_head);
   prefsDiag.putUShort("count", g_count);
-  String key = "c" + String(chunk);
-  prefsDiag.putBytes(key.c_str(), &g_diag[chunk * DIAG_CHUNK_ENTRIES], DIAG_CHUNK_ENTRIES * sizeof(DiagEntry));
+  // Igual que en datalog.cpp: clave fija sin String para no fragmentar
+  // el heap en cada muestra periodica.
+  char key[4];
+  snprintf(key, sizeof(key), "c%d", chunk);
+  prefsDiag.putBytes(key, &g_diag[chunk * DIAG_CHUNK_ENTRIES], DIAG_CHUNK_ENTRIES * sizeof(DiagEntry));
   prefsDiag.end();
 }
 
