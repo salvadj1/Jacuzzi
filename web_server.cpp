@@ -216,6 +216,14 @@ void webServerBegin() {
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
+  // Borra TODO el historico (opcion de ultimo recurso "FORMATEAR DATOS"
+  // en /datos, para cuando un dia concreto no se puede borrar por datos
+  // corruptos).
+  server.on("/api/history/format", HTTP_POST, [](AsyncWebServerRequest *request) {
+    datalogFormat();
+    request->send(200, "application/json", "{\"ok\":true}");
+  });
+
   // Pagina de diagnostico (heap, WiFi, clientes, motivos de reinicio)
   server.on("/diag", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, "text/html", DIAG_HTML);

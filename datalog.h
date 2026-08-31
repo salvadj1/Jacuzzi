@@ -68,3 +68,10 @@ String datalogToJson();
 // compacta el resto. Operacion puntual bajo demanda -no se llama desde
 // el loop()-, reescribe el historico completo en NVS.
 void datalogDeleteRange(uint32_t fromTs, uint32_t toTs);
+
+// Borra TODO el historico (buffer en RAM + namespace NVS completo) y
+// vuelve a dejarlo como recien arrancado por primera vez. Pensado como
+// opcion de ultimo recurso ("FORMATEAR DATOS") para cuando algun dia
+// concreto no se puede borrar por datos corruptos que datalogDeleteRange
+// no consigue identificar/compactar bien.
+void datalogFormat();

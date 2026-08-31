@@ -109,6 +109,24 @@ void datalogLoop() {
   }
 }
 
+// Borrado total de emergencia: limpia el buffer en RAM y borra por
+// completo el namespace NVS "datalog" (mas fiable que reescribir chunk
+// a chunk si hay datos corruptos que datalogDeleteRange no consigue
+// identificar bien).
+void datalogFormat() {
+  memset(g_log, 0, sizeof(g_log));
+  g_head  = 0;
+  g_count = 0;
+  g_lastFlags = 0xFF;
+  g_lastSampleMillis = 0;
+
+  prefsLog.begin("datalog", false);
+  prefsLog.clear();
+  prefsLog.end();
+
+  Serial.println("[DATALOG] Historico formateado por completo");
+}
+
 int datalogCount() {
   return g_count;
 }

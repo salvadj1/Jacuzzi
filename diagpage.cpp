@@ -74,23 +74,12 @@ tr.evento td{color:var(--amber);font-weight:700;}
   </div>
 
   <div class="panel">
-    <div class="tabs">
-      <div class="tab-btn activa" data-tab="general">General</div>
-      <div class="tab-btn" data-tab="memoria">Memoria / Rendimiento</div>
-    </div>
     <div class="tabla-scroll">
       <div id="emptyMsg" style="display:none;">Aun no hay muestras de diagnostico.</div>
 
-      <table id="tablaGeneral" style="display:none;">
+      <table id="tablaDiag" style="display:none;">
         <thead>
-          <tr><th>Fecha/hora</th><th>Uptime</th><th>Heap libre</th><th>WiFi</th><th>RSSI</th><th>Clientes</th><th>Motivo arranque</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-
-      <table id="tablaMemoria" style="display:none;">
-        <thead>
-          <tr><th>Fecha/hora</th><th>Heap libre</th><th>Heap max. asignable</th><th>Stack libre min.</th><th>Loop max.</th><th>Reconex. WiFi</th><th>Errores NTC</th></tr>
+          <tr><th>Fecha/hora</th><th>Uptime</th><th>Heap libre</th><th>Heap max. asignable</th><th>Stack libre min.</th><th>Loop max.</th><th>WiFi</th><th>RSSI</th><th>Clientes</th><th>Reconex. WiFi</th><th>Errores NTC</th><th>Motivo arranque</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -198,19 +187,17 @@ async function loadData(){
     data = { samples: [] };
   }
   const samples = data.samples || [];
-  const tGeneral = document.getElementById('tablaGeneral');
-  const tMemoria = document.getElementById('tablaMemoria');
+  const tDiag = document.getElementById('tablaDiag');
   const empty = document.getElementById('emptyMsg');
 
   if(samples.length === 0){
     empty.style.display = 'block';
-    tGeneral.style.display = 'none';
-    tMemoria.style.display = 'none';
+    tDiag.style.display = 'none';
     document.getElementById('resumen').innerHTML = '';
     return;
   }
   empty.style.display = 'none';
-  aplicarTab(); // decide cual de las 2 tablas mostrar segun la pestaña activa
+  tDiag.style.display = 'table';
 
   drawHeapChart(document.getElementById('heapChart'), samples);
 
@@ -241,57 +228,33 @@ async function loadData(){
     '<div class="tarjeta"><div class="lbl">ERRORES SENSOR NTC</div><div class="val '+(last[IDX.ntcErrors]>0?'warn':'ok')+'">'+last[IDX.ntcErrors]+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">REINICIOS NO NORMALES</div><div class="val '+(arranques>0?'warn':'ok')+'">'+arranques+'</div></div>';
 
-  const cGeneral = tGeneral.querySelector('tbody');
-  const cMemoria = tMemoria.querySelector('tbody');
-  cGeneral.innerHTML = '';
-  cMemoria.innerHTML = '';
+  const cDiag = tDiag.querySelector('tbody');
+  cDiag.innerHTML = '';
 
   // Se muestran de mas reciente a mas antigua
   for(let i = samples.length-1; i>=0; i--){
     const s = samples[i];
     const esEvento = s[IDX.resetReason] && s[IDX.resetReason] !== 1;
 
-    const trG = document.createElement('tr');
-    if(esEvento) trG.className = 'evento';
-    trG.innerHTML =
+    const tr = document.createElement('tr');
+    if(esEvento) tr.className = 'evento';
+    tr.innerHTML =
       '<td>'+fmtFecha(s[IDX.ts])+'</td>'+
       '<td>'+fmtUptime(s[IDX.uptime])+'</td>'+
-      '<td>'+fmtHeap(s[IDX.freeHeap])+'</td>'+
-      '<td>'+(s[IDX.wifiOk] ? 'Conectado' : 'Sin red')+'</td>'+
-      '<td>'+(s[IDX.wifiOk] ? s[IDX.rssi]+' dBm' : '-')+'</td>'+
-      '<td>'+s[IDX.wsClients]+'</td>'+
-      '<td>'+motivoTexto(s)+'</td>';
-    cGeneral.appendChild(trG);
-
-    const trM = document.createElement('tr');
-    if(esEvento) trM.className = 'evento';
-    trM.innerHTML =
-      '<td>'+fmtFecha(s[IDX.ts])+'</td>'+
       '<td>'+fmtHeap(s[IDX.freeHeap])+'</td>'+
       '<td>'+fmtHeap(s[IDX.maxAllocHeap])+'</td>'+
       '<td>'+fmtStack(s[IDX.stackMin])+'</td>'+
       '<td>'+fmtMicros(s[IDX.loopMax])+'</td>'+
+      '<td>'+(s[IDX.wifiOk] ? 'Conectado' : 'Sin red')+'</td>'+
+      '<td>'+(s[IDX.wifiOk] ? s[IDX.rssi]+' dBm' : '-')+'</td>'+
+      '<td>'+s[IDX.wsClients]+'</td>'+
       '<td>'+s[IDX.wifiReconnects]+'</td>'+
-      '<td>'+s[IDX.ntcErrors]+'</td>';
-    cMemoria.appendChild(trM);
+      '<td>'+s[IDX.ntcErrors]+'</td>'+
+      '<td>'+motivoTexto(s)+'</td>';
+    cDiag.appendChild(tr);
   }
 }
 
-// Pestañas General / Memoria y Rendimiento: solo cambian que tabla se ve,
-// los datos ya estan cargados en ambas por loadData().
-let tabActiva = 'general';
-function aplicarTab(){
-  document.getElementById('tablaGeneral').style.display = (tabActiva === 'general') ? 'table' : 'none';
-  document.getElementById('tablaMemoria').style.display = (tabActiva === 'memoria') ? 'table' : 'none';
-}
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('activa'));
-    btn.classList.add('activa');
-    tabActiva = btn.dataset.tab;
-    aplicarTab();
-  });
-});
 
 // Borra el historico de diagnostico en el ESP32 (con confirmacion, ya
 // que no se puede deshacer) y recarga la tabla al terminar.

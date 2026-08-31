@@ -96,7 +96,7 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 </head>
 <body>
 <div class="wrap">
-  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" href="/">&larr; VOLVER</a></span></h1>
+  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" id="btnFormatear" href="#" style="color:var(--red);border-color:var(--red);">FORMATEAR DATOS</a><a class="back" href="/">&larr; VOLVER</a></span></h1>
 
   <div class="panel">
     <div class="day-pager" id="pager"></div>
@@ -617,6 +617,22 @@ document.getElementById('evtNext').addEventListener('click', ()=> navEvt(1));
     navEvt(dx<0 ? 1 : -1);
   });
 })();
+
+// Ultimo recurso si algun dia concreto no se deja borrar (datos
+// corruptos): borra TODO el historico. Doble confirmacion porque no
+// se puede deshacer.
+document.getElementById('btnFormatear').addEventListener('click', async (ev) => {
+  ev.preventDefault();
+  if (!confirm('¿Formatear TODOS los datos del historico? Esta accion no se puede deshacer.')) return;
+  if (!confirm('Ultima confirmacion: se borraran TODOS los dias, no solo el problematico. ¿Continuar?')) return;
+  try {
+    await fetch('/api/history/format', { method: 'POST' });
+  } catch (e) {
+    alert('Error al formatear el historico.');
+    return;
+  }
+  loadData();
+});
 
 loadData();
 setInterval(loadData, 60000); // refresca cada minuto
