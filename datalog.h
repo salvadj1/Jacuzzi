@@ -41,6 +41,16 @@ struct __attribute__((packed)) LogEntry {
 // que se añaden en cada evento (se van descartando las mas antiguas).
 #define LOG_CAPACITY 1000
 
+// Cada cuantas muestras nuevas (en RAM) se vuelca el buffer a NVS.
+// Antes se escribia en flash en CADA muestra (cada 15 min o en cada
+// cambio de estado); esa escritura bloqueante en NVS era la causa
+// confirmada de resets por watchdog/panic dentro de datalogLoop (ver
+// diagnostico /diag, breadcrumb "datalogLoop"). Con este valor se reduce
+// la frecuencia de escritura a costa de poder perder, como mucho, las
+// ultimas (DATALOG_PERSIST_EVERY_N - 1) muestras si hay un corte de luz
+// justo antes del proximo volcado.
+#define DATALOG_PERSIST_EVERY_N 4
+
 // Inicializa el modulo: carga el buffer guardado en NVS (si existe).
 // Llamar una vez en setup(), despues de storageInit().
 void datalogInit();

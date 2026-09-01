@@ -12,6 +12,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <string.h>
+#include <esp_task_wdt.h>
 
 // Namespace propio en NVS para no mezclar con storage.cpp
 static Preferences prefsLog;
@@ -28,21 +29,38 @@ static uint16_t g_count = 0; // muestras validas actualmente guardadas
 static unsigned long g_lastSampleMillis = 0;
 static uint8_t       g_lastFlags        = 0xFF; // invalido a proposito: fuerza el primer registro
 
+// Contador de muestras añadidas en RAM desde el ultimo volcado a NVS.
+// Ver DATALOG_PERSIST_EVERY_N en datalog.h: reduce la frecuencia de
+// escritura en flash, que era la causa confirmada de resets por
+// watchdog/panic dentro de datalogLoop (ver diagnostico /diag).
+static uint8_t g_samplesSinceFlush = 0;
+
 // Vuelca a NVS solo el trozo que contiene "physicalIndex", mas la cabecera
 // (head/count). Minimiza el desgaste de flash frente a regrabar todo el
 // buffer en cada muestra.
+//
+// Reutilizable: puede llamarse desde cualquier modulo que necesite forzar
+// el respaldo en NVS de un buffer circular con este mismo patron de chunks.
+//
+// Se "alimenta" el watchdog antes y despues de la escritura en flash:
+// aunque ahora se llama con mucha menos frecuencia (ver
+// DATALOG_PERSIST_EVERY_N), esto actua como red de seguridad ante una
+// escritura NVS puntual mas lenta de lo normal (flash desgastada, etc.),
+// evitando que dispare un reset por watchdog en mitad de la operacion.
 static void persistChunk(uint16_t physicalIndex) {
   int chunk = physicalIndex / LOG_CHUNK_ENTRIES;
+  esp_task_wdt_reset();
   prefsLog.begin("datalog", false);
   prefsLog.putUShort("head", g_head);
   prefsLog.putUShort("count", g_count);
-  // Clave fija en stack (sin String): esto se llama en cada muestra
-  // (cada 15 min o en cada cambio de estado), y usar String aqui iba
-  // fragmentando el heap con el tiempo hasta provocar un panic.
+  // Clave fija en stack (sin String): esto se llama en cada volcado a NVS,
+  // y usar String aqui iba fragmentando el heap con el tiempo hasta
+  // provocar un panic.
   char key[4];
   snprintf(key, sizeof(key), "c%d", chunk);
   prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
   prefsLog.end();
+  esp_task_wdt_reset();
 }
 
 void datalogInit() {
@@ -81,7 +99,18 @@ static void addEntry(uint8_t flags) {
   e.flags       = flags;
 
   g_log[g_head] = e;
-  persistChunk(g_head);
+
+  // Solo se vuelca a NVS cada DATALOG_PERSIST_EVERY_N muestras (o si el
+  // buffer aun no se ha inicializado con ninguna previa), no en cada una:
+  // esto es lo que reduce la frecuencia de escritura en flash. El resto
+  // del tiempo la muestra vive solo en RAM (g_log) hasta el proximo
+  // volcado.
+  g_samplesSinceFlush++;
+  bool shouldFlush = (g_samplesSinceFlush >= DATALOG_PERSIST_EVERY_N);
+  if (shouldFlush) {
+    persistChunk(g_head);
+    g_samplesSinceFlush = 0;
+  }
 
   g_head = (g_head + 1) % LOG_CAPACITY;
   if (g_count < LOG_CAPACITY) g_count++;
@@ -119,6 +148,7 @@ void datalogFormat() {
   g_count = 0;
   g_lastFlags = 0xFF;
   g_lastSampleMillis = 0;
+  g_samplesSinceFlush = 0;
 
   prefsLog.begin("datalog", false);
   prefsLog.clear();
@@ -188,6 +218,7 @@ void datalogDeleteRange(uint32_t fromTs, uint32_t toTs) {
   // criterio es el mismo que en datalogGet() para ese caso (head=count).
   g_count = kept;
   g_head  = kept % LOG_CAPACITY;
+  g_samplesSinceFlush = 0; // esta operacion vuelca todo el buffer a continuacion
 
   prefsLog.begin("datalog", false);
   prefsLog.putUShort("head", g_head);
