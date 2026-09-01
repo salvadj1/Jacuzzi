@@ -170,9 +170,10 @@ function motivoTexto(s){
 // Dibuja una curva generica (heap, stack, loop...) en el tiempo. Sin zoom
 // ni ejes interactivos (a diferencia de datapage.cpp): aqui solo interesa
 // ver de un vistazo la tendencia (p.ej. una fuga de memoria = pendiente
-// descendente). Reutilizable: recibe los valores ya extraidos y el color
-// de trazo, no depende de que columna sea.
-function drawLineChart(canvas, values, strokeColorVar, height){
+// descendente). Reutilizable: recibe los valores ya extraidos, el color
+// de trazo y una funcion de formato opcional para las etiquetas de
+// referencia (min/max) que se dibujan sobre la propia grafica.
+function drawLineChart(canvas, values, strokeColorVar, height, fmtFn){
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.parentElement.clientWidth;
   const H = height || 120;
@@ -188,24 +189,47 @@ function drawLineChart(canvas, values, strokeColorVar, height){
     return;
   }
 
+  const fmt = fmtFn || (v => Math.round(v).toString());
   const maxV = Math.max(...values) * 1.05;
   const minV = Math.min(...values) * 0.95;
   const range = Math.max(maxV - minV, 1);
-  const padL = 4, padR = 4, padT = 6, padB = 6;
+  // padR ampliado para dejar sitio a las etiquetas de valor minimo/maximo
+  // (antes no se dibujaba ningun numero de referencia sobre la grafica).
+  const padL = 4, padR = 46, padT = 12, padB = 14;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const x = i => padL + (i/(values.length-1)) * plotW;
   const y = v => padT + plotH - ((v-minV)/range) * plotH;
 
-  // Linea guia horizontal en el minimo (para ver rapido el peor momento)
+  const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--dim');
+  const strokeColor = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
+
+  // Linea guia horizontal en el minimo y en el maximo, cada una con su
+  // valor de referencia escrito al final de la linea.
   ctx.strokeStyle = '#22332c';
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(padL, y(minV));
-  ctx.lineTo(W-padR, y(minV));
-  ctx.stroke();
+  ctx.setLineDash([2,2]);
+  [minV, maxV].forEach(v => {
+    ctx.beginPath();
+    ctx.moveTo(padL, y(v));
+    ctx.lineTo(W-padR, y(v));
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
 
-  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
+  ctx.fillStyle = dimColor;
+  ctx.font = '10px monospace';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(fmt(maxV), W-padR+4, y(maxV));
+  ctx.fillText(fmt(minV), W-padR+4, y(minV));
+
+  // Valor de la ultima muestra, en el color de la propia curva, para
+  // saber de un vistazo el dato actual sin mirar la tabla.
+  ctx.fillStyle = strokeColor;
+  ctx.font = 'bold 10px monospace';
+  ctx.fillText(fmt(values[values.length-1]), W-padR+4, y(values[values.length-1]) + 12 * Math.sign(y(minV)-y(values[values.length-1])||1));
+
+  ctx.strokeStyle = strokeColor;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   values.forEach((v,i) => { const px=x(i), py=y(v); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); });
@@ -216,6 +240,8 @@ function drawLineChart(canvas, values, strokeColorVar, height){
 // normal" (todo lo que no sea encendido con corriente). Ayuda a ver de un
 // vistazo si los reinicios se agrupan (siempre a las pocas horas = algo se
 // degrada rapido) o son esporadicos (posible causa externa puntual).
+// Cada barra lleva encima su valor (fmtUptime) como referencia, ya que
+// antes no se dibujaba ningun numero sobre la grafica.
 function drawResetBars(canvas, uptimes){
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.parentElement.clientWidth;
@@ -232,18 +258,25 @@ function drawResetBars(canvas, uptimes){
     return;
   }
 
-  const maxV = Math.max(...uptimes) * 1.1 || 1;
-  const padL = 4, padR = 4, padT = 6, padB = 6;
+  const maxV = Math.max(...uptimes) * 1.15 || 1;
+  const padL = 4, padR = 4, padT = 14, padB = 6;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const barGap = 4;
   const barW = Math.max((plotW - barGap*(uptimes.length-1)) / uptimes.length, 2);
 
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--red');
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
   uptimes.forEach((v,i) => {
-    const h = (v/maxV) * plotH;
+    // Altura minima visible para que un reinicio con uptime muy bajo
+    // (crash a los pocos segundos de arrancar) siga siendo visible como
+    // barra, en vez de quedar en 0px e invisible.
+    const h = Math.max((v/maxV) * plotH, 2);
     const px = padL + i*(barW+barGap);
     ctx.fillRect(px, padT+plotH-h, barW, h);
+    ctx.fillText(fmtUptime(v), px+barW/2, padT+plotH-h-4);
   });
+  ctx.textAlign = 'left';
 }
 
 async function loadData(){
@@ -275,18 +308,30 @@ async function loadData(){
   empty.style.display = 'none';
   tDiag.style.display = 'table';
 
-  drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120);
-  drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70);
-  drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70);
+  drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120, fmtHeap);
+  drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70, fmtStack);
+  drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70, fmtMicros);
 
-  // Reinicios no normales: uptime alcanzado justo antes de cada uno
-  const eventos = samples.filter(s => s[IDX.resetReason] && s[IDX.resetReason] !== 1);
-  document.getElementById('panelReinicios').style.display = eventos.length ? 'block' : 'none';
-  if(eventos.length) drawResetBars(document.getElementById('resetChart'), eventos.map(s=>s[IDX.uptime]));
+  // Reinicios no normales: uptime alcanzado justo ANTES de cada uno.
+  // OJO: la muestra que trae resetReason es la que se registra nada mas
+  // arrancar (diaglogInit), asi que su propio campo "uptime" es ~0 (lleva
+  // segundos vivo) y no sirve de nada para ver cuanto aguanto el firmware.
+  // Lo que interesa es el uptime de la muestra ANTERIOR (la ultima vez que
+  // se supo que seguia vivo antes del cuelgue). Antes se usaba el uptime
+  // de la propia muestra de reinicio, por eso la grafica salia siempre
+  // vacia/plana (barras a 0).
+  const uptimesAntesDeReinicio = [];
+  for(let i=0; i<samples.length; i++){
+    const s = samples[i];
+    const esEvento = s[IDX.resetReason] && s[IDX.resetReason] !== 1;
+    if(esEvento && i>0) uptimesAntesDeReinicio.push(samples[i-1][IDX.uptime]);
+  }
+  document.getElementById('panelReinicios').style.display = uptimesAntesDeReinicio.length ? 'block' : 'none';
+  if(uptimesAntesDeReinicio.length) drawResetBars(document.getElementById('resetChart'), uptimesAntesDeReinicio);
 
   // Resumen: ultima muestra + numero de arranques detectados en el historico
   const last = samples[samples.length-1];
-  const arranques = eventos.length;
+  const arranques = samples.filter(s => s[IDX.resetReason] && s[IDX.resetReason] !== 1).length;
 
   const heapClass = last[IDX.freeHeap] < 20000 ? 'bad' : (last[IDX.freeHeap] < 40000 ? 'warn' : 'ok');
 
