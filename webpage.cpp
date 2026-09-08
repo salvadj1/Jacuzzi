@@ -163,6 +163,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     <div id="opcionesRow" class="dropdown">
       <button id="btnWifi">WIFI</button>
       <button onclick="location.href='/datos'">DATOS</button>
+      <button onclick="location.href='/leds'">LEDS</button>
       <button onclick="location.href='/diag'">DIAGNOSTICO</button>
       <button id="btnRestart">RESTART</button>
     </div>

@@ -35,6 +35,7 @@
 #include "diaglog.h"
 #include "ota.h"
 #include "web_server.h"
+#include "tiras_led.h"
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
@@ -101,6 +102,9 @@ void setup() {
   // sus rutas de configuracion.
   webServerBegin();
 
+  Serial.println("[MAIN] Inicializando modulo de tiras LED BLE...");
+  ledsInit();
+
   Serial.println("[MAIN] Inicializando WiFi...");
   setupWifi(); // conecta a la mejor red conocida, y abre el AP de config
 
@@ -142,6 +146,8 @@ void loop() {
 
   diaglogSetStage(DIAG_STAGE_WEBSERVER);
   webServerLoop();               // purga clientes WebSocket desconectados
+
+  ledsLoop();                    // efectos, reconexion BLE y programa de LEDs
 
   diaglogSetStage(DIAG_STAGE_DIAGLOG);
   diaglogLoop(wsClientCount(), wifiReconnectCount(), ntcErrorCount()); // registro de diagnostico
