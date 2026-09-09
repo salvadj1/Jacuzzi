@@ -15,13 +15,16 @@
 #include "data.h"
 #include <math.h>
 
+unsigned long lastTempMessageMs = 0;
+#define TEMP_MESSAGE_INTERVAL_MS 60000UL
+
 static unsigned long lastReadMs = 0;
-static uint16_t ntcErrors = 0; // lecturas fuera de rango o con ADC saturado (diagnostico)
+static uint16_t ntcErrors = 0;  // lecturas fuera de rango o con ADC saturado (diagnostico)
 
 // Media movil para suavizar oscilaciones de temperatura mostrada
 #define TEMP_AVG_SAMPLES 10
-static float t1Buf[TEMP_AVG_SAMPLES] = {0};
-static float t2Buf[TEMP_AVG_SAMPLES] = {0};
+static float t1Buf[TEMP_AVG_SAMPLES] = { 0 };
+static float t2Buf[TEMP_AVG_SAMPLES] = { 0 };
 static uint8_t avgIdx = 0;
 static bool avgFilled = false;
 
@@ -34,8 +37,8 @@ static float pushAndAverage(float *buf, float newVal) {
 }
 
 void setupTempSensors() {
-  analogSetAttenuation(ADC_11db);      // permite leer hasta ~3.3V en el ADC
-  analogReadResolution(12);            // 0-4095
+  analogSetAttenuation(ADC_11db);  // permite leer hasta ~3.3V en el ADC
+  analogReadResolution(12);        // 0-4095
   Serial.printf("[TEMP] Sensores NTC listos (T1=GPIO%d, T2=GPIO%d)\n", PIN_NTC_T1, PIN_NTC_T2);
 }
 
@@ -43,7 +46,7 @@ float readNtcCelsius(uint8_t pin) {
   uint32_t sum = 0;
   for (int i = 0; i < NTC_ADC_SAMPLES; i++) {
     sum += analogRead(pin);
-    delayMicroseconds(200); // pequeño espaciado entre muestras para promediar mejor
+    delayMicroseconds(200);  // pequeño espaciado entre muestras para promediar mejor
   }
   float adcAvg = (float)sum / NTC_ADC_SAMPLES;
 
@@ -51,7 +54,7 @@ float readNtcCelsius(uint8_t pin) {
   // cuenta como error de diagnostico (el cableado hay que revisarlo),
   // pero se sigue calculando algo razonable para no romper el control.
   bool adcSaturado = (adcAvg <= NTC_ADC_SATURATION_LOW) || (adcAvg >= NTC_ADC_SATURATION_HIGH);
-  if (adcAvg <= 0) adcAvg = 1; // evita division por cero si el cable esta suelto
+  if (adcAvg <= 0) adcAvg = 1;  // evita division por cero si el cable esta suelto
 
   // Voltaje en el nodo intermedio del divisor (escala 0-4095 -> 0-3.3V)
   float vNode = (adcAvg / 4095.0f) * 3.3f;
@@ -85,10 +88,15 @@ void loopTempSensors() {
   float rawT2 = readNtcCelsius(PIN_NTC_T2) + g_state.offsetT2;
 
   g_state.tJacuzzi = pushAndAverage(t1Buf, rawT1);
-  g_state.tSolar   = pushAndAverage(t2Buf, rawT2);
+  g_state.tSolar = pushAndAverage(t2Buf, rawT2);
 
   avgIdx = (avgIdx + 1) % TEMP_AVG_SAMPLES;
   if (avgIdx == 0) avgFilled = true;
 
-  Serial.printf("[TEMP] T1=%.1fC  T2=%.1fC\n", g_state.tJacuzzi, g_state.tSolar);
+  //Serial.printf("[TEMP] T1=%.1fC  T2=%.1fC\n", g_state.tJacuzzi, g_state.tSolar);
+  // Mostrar el mensaje como máximo una vez por minuto
+  if (millis() - lastTempMessageMs >= TEMP_MESSAGE_INTERVAL_MS) {
+    lastTempMessageMs = millis();
+    Serial.printf("[TEMP] T1=%.1fC  T2=%.1fC\n", g_state.tJacuzzi, g_state.tSolar);
+  }
 }

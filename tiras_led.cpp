@@ -36,6 +36,8 @@
 #define LEDS_RECONNECT_MAX_MS  30000 // Backoff de reconexion: maximo
 #define LEDS_RECONNECT_STEP_MS 4000  // Backoff de reconexion: incremento
 #define LEDS_CONNECT_TIMEOUT_MS 4000 // Timeout maximo para un intento de conexion BLE
+#define LEDS_CONNECT_SETTLE_MS  400  // Margen tras conectar antes de enviar la 1a orden (no bloqueante, ver ledsQueueOrSend)
+#define LEDS_TX_GAP_MS          120  // Separacion minima entre 2 comandos BLE seguidos a la misma tira (no bloqueante)
 // Limite de conexiones BLE SIMULTANEAS que este firmware intentara abrir.
 // OJO: esto NO es solo un capricho de diseno, es una proteccion real: la
 // libreria NimBLE-Arduino reserva en tiempo de COMPILACION un numero fijo
@@ -85,6 +87,20 @@ struct LedStrip {
   unsigned long retryDelayMs = LEDS_RECONNECT_MIN_MS; // backoff actual
   NimBLEClient* client = nullptr;             // cliente NimBLE de esta tira
   NimBLERemoteCharacteristic* writeChar = nullptr; // caracteristica de escritura
+
+  // --- Cola de envio no bloqueante (ver ledsQueueOrSend/ledsFlushPendingTx) ---
+  // Permite espaciar 2 comandos seguidos (ej: power luego color) y dar un
+  // margen tras conectar, SIN usar delay() en ningun momento: el propio
+  // ledsLoop() va vaciando la cola cuando toca, en cada vuelta.
+  unsigned long nextTxAllowedMs = 0;   // no se envia nada a esta tira antes de este instante
+  bool    pendingCmd  = false;         // hay un 1er comando en cola
+  uint8_t pendingData[9] = {0};
+  uint8_t pendingLen  = 0;
+  String  pendingDesc;                 // descripcion legible del 1er comando en cola (para el log)
+  bool    pendingCmd2 = false;         // hay un 2o comando en cola (ej: color tras power)
+  uint8_t pendingData2[9] = {0};
+  uint8_t pendingLen2 = 0;
+  String  pendingDesc2;                // descripcion legible del 2o comando en cola
 };
 
 // Un programa horario de encendido/apagado del grupo de LEDs
@@ -95,6 +111,10 @@ struct LedProgram {
   uint8_t endHour     = 23;
   uint8_t endMinute   = 0;
   bool    days[7]     = {false,false,false,false,false,false,false}; // 0=Domingo..6=Sabado
+  uint8_t colorR      = 255; // color propio del programa (no el global)
+  uint8_t colorG      = 120;
+  uint8_t colorB      = 0;
+  uint8_t intensity   = 100; // brillo propio del programa (0-100 %)
 };
 
 // ============================================================================
@@ -193,11 +213,13 @@ static unsigned long g_effectLastStepMs = 0;
 static uint16_t g_effectStep = 0; // contador de pasos generico, cada efecto lo interpreta a su manera
 
 // --- Estado de aplicacion del programa horario (para no repetir logs/acciones) ---
-static bool g_scheduleForcedState = false; // ultimo estado ON/OFF aplicado por el programa
+static bool g_scheduleForcedState = false; // ultimo estado ON/OFF calculado por el horario (para detectar cambios)
+static bool g_scheduleOwnsPower   = false; // true si el power actual (ON) lo puso el horario, no el usuario
 
 // Declaraciones adelantadas (funciones privadas de este archivo)
 static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b);
 static void ledsApplyPowerToAllStrips(bool on);
+static void ledsFlushPendingTx();
 static void ledsSaveGroup();
 static void ledsLoadGroup();
 static void ledsSaveSettings();
@@ -272,23 +294,116 @@ static void ledsHsvToRgb(uint16_t h, uint8_t s, uint8_t v, uint8_t &r, uint8_t &
 
 // Envia un comando crudo (array de bytes) a una tira ya conectada.
 // Reutilizable para cualquier comando del protocolo ELK-BLEDOM/generico.
-static void ledsSendRaw(LedStrip &s, const uint8_t *data, size_t len) {
-  if (!s.connected || s.writeChar == nullptr) return;
+// Registra en el monitor serie CADA comando enviado (o el motivo por el
+// que no se pudo enviar), con los bytes en hexadecimal, una descripcion
+// legible de que hace el comando, y el resultado de la escritura BLE,
+// para tener trazabilidad completa ante fallos.
+static void ledsSendRaw(LedStrip &s, const uint8_t *data, size_t len, const String &desc) {
+  if (!s.connected || s.writeChar == nullptr) {
+    Serial.printf("[LEDS][BLE-TX] %s: comando descartado (tira no conectada) [%s]\n",
+                  s.mac.c_str(), desc.c_str());
+    return;
+  }
+  String hex;
+  for (size_t i = 0; i < len; i++) {
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%02X ", data[i]);
+    hex += buf;
+  }
   // "true" = write sin respuesta (write-without-response): mas rapido y
   // es lo que esperan estas tiras; evita bloquear esperando ACK.
-  s.writeChar->writeValue((uint8_t*)data, len, false);
+  bool ok = s.writeChar->writeValue((uint8_t*)data, len, false);
+  Serial.printf("[LEDS][BLE-TX] %s (%s): [ %s] -> %s [%s]\n",
+                s.name.c_str(), s.mac.c_str(), hex.c_str(),
+                ok ? "OK" : "FALLO", desc.c_str());
+}
+
+// Envia YA un comando si esta tira puede recibirlo ahora mismo (ha pasado
+// su margen minimo desde el ultimo envio/conexion), o si no, lo deja
+// encolado (maximo 2 en cola) para que ledsFlushPendingTx() lo envie mas
+// adelante desde ledsLoop(). Nunca bloquea: no hay delay() en ningun caso.
+// Reutilizable para cualquier protocolo de tira BLE que necesite espaciar
+// sus comandos. "desc" es una descripcion legible del comando (para el
+// log), que viaja con el comando aunque quede encolado.
+static void ledsQueueOrSend(LedStrip &s, const uint8_t *data, size_t len, const String &desc) {
+  if (!s.connected || s.writeChar == nullptr) return;
+  if (len > sizeof(s.pendingData)) return; // proteccion, no deberia ocurrir (comandos de 9 bytes)
+
+  if (!s.pendingCmd && millis() >= s.nextTxAllowedMs) {
+    // Puede enviarse ya: no hay nada delante en la cola y ha pasado el margen.
+    ledsSendRaw(s, data, len, desc);
+    s.nextTxAllowedMs = millis() + LEDS_TX_GAP_MS;
+  } else if (!s.pendingCmd) {
+    s.pendingCmd = true;
+    memcpy(s.pendingData, data, len);
+    s.pendingLen = (uint8_t)len;
+    s.pendingDesc = desc;
+  } else {
+    // Ya hay un 1er comando en cola: este va de 2o (sustituye a cualquier
+    // 2o comando anterior sin enviar, para no acumular ordenes obsoletas
+    // ej. varios cambios de color seguidos mientras la cola esta ocupada).
+    s.pendingCmd2 = true;
+    memcpy(s.pendingData2, data, len);
+    s.pendingLen2 = (uint8_t)len;
+    s.pendingDesc2 = desc;
+  }
+}
+
+// Recorre el grupo y envia el siguiente comando en cola de cada tira que
+// ya pueda recibirlo (margen cumplido). Se llama en cada vuelta de
+// ledsLoop(): es la pieza que hace que todo lo anterior sea no bloqueante.
+static void ledsFlushPendingTx() {
+  unsigned long now = millis();
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || !s.connected || !s.pendingCmd) continue;
+    if (now < s.nextTxAllowedMs) continue;
+
+    LedsMutexGuard guard(g_bleMutex);
+    ledsSendRaw(s, s.pendingData, s.pendingLen, s.pendingDesc);
+    s.nextTxAllowedMs = millis() + LEDS_TX_GAP_MS;
+    s.pendingCmd = false;
+
+    if (s.pendingCmd2) {
+      // Pasa el 2o comando a 1a posicion: se enviara en la siguiente
+      // vuelta en la que ya haya pasado el nuevo margen.
+      s.pendingCmd = true;
+      memcpy(s.pendingData, s.pendingData2, s.pendingLen2);
+      s.pendingLen = s.pendingLen2;
+      s.pendingDesc = s.pendingDesc2;
+      s.pendingCmd2 = false;
+    }
+  }
+}
+
+// Construye una descripcion legible de un color, para el log: reconoce
+// algunos colores habituales por su nombre y si no, muestra el RGB en
+// crudo. Reutilizable para cualquier log o interfaz que describa colores.
+static String ledsDescribeColor(uint8_t r, uint8_t g, uint8_t b) {
+  if (r == 0   && g == 0   && b == 0)   return "color negro/apagado";
+  if (r == 255 && g == 255 && b == 255) return "color blanco";
+  if (r == 255 && g == 0   && b == 0)   return "color rojo";
+  if (r == 0   && g == 255 && b == 0)   return "color verde";
+  if (r == 0   && g == 0   && b == 255) return "color azul";
+  if (r == 255 && g == 255 && b == 0)   return "color amarillo";
+  if (r == 0   && g == 255 && b == 255) return "color cian";
+  if (r == 255 && g == 0   && b == 255) return "color magenta";
+  char buf[32];
+  snprintf(buf, sizeof(buf), "color RGB(%u,%u,%u)", r, g, b);
+  return String(buf);
 }
 
 // Envia color RGB (ya con el brillo aplicado) a una tira concreta.
 static void ledsSendColorToStrip(LedStrip &s, uint8_t r, uint8_t g, uint8_t b) {
   uint8_t cmd[9] = {0x7E, 0x00, 0x05, 0x03, r, g, b, 0x00, 0xEF};
-  ledsSendRaw(s, cmd, sizeof(cmd));
+  String desc = ledsDescribeColor(r, g, b) + ", brillo " + String(g_brightness) + "%";
+  ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
 }
 
 // Envia encendido/apagado a una tira concreta.
 static void ledsSendPowerToStrip(LedStrip &s, bool on) {
   uint8_t cmd[9] = {0x7E, 0x04, 0x04, (uint8_t)(on ? 0x01 : 0x00), 0x00, 0x00, 0x00, 0x00, 0xEF};
-  ledsSendRaw(s, cmd, sizeof(cmd));
+  ledsQueueOrSend(s, cmd, sizeof(cmd), on ? "encendido" : "apagado");
 }
 
 // Aplica un color (con brillo ya escalado) a TODAS las tiras conectadas
@@ -423,16 +538,26 @@ static void ledsTryConnectStrip(LedStrip &s) {
 
   s.connected = true;
   s.retryDelayMs = LEDS_RECONNECT_MIN_MS; // exito: resetea el backoff
+  // Margen antes de aceptar la primera orden: esta tira corta la conexion
+  // si recibe algo demasiado pronto tras conectar. No es un delay(): solo
+  // se fija un instante futuro, y ledsQueueOrSend()/ledsFlushPendingTx()
+  // se encargan de esperar a que llegue sin bloquear nada.
+  s.nextTxAllowedMs = millis() + LEDS_CONNECT_SETTLE_MS;
   Serial.printf("[LEDS] Tira %s conectada correctamente\n", s.mac.c_str());
 
-  // Al reconectar, se re-envia el estado actual para que la tira quede
-  // igual que el resto del grupo (color/brillo/on-off vigentes).
-  ledsSendPowerToStrip(s, g_power);
+  // Al reconectar, se encola el reenvio del estado actual (color/brillo/
+  // on-off vigentes) para que la tira quede igual que el resto del grupo.
+  // Se enviara en cuanto pase el margen de asentamiento, desde ledsLoop().
+  // IMPORTANTE: si hay que encender, el COLOR va primero y el opcode de
+  // "power ON" despues (orden invertido a proposito): en esta tira en
+  // concreto el opcode de encendido solo, sin color, no siempre reactiva
+  // la salida; el comando de color si la reactiva de forma fiable.
   if (g_power) {
     ledsSendColorToStrip(s, ledsScaleChannel(g_colorR, g_brightness),
                              ledsScaleChannel(g_colorG, g_brightness),
                              ledsScaleChannel(g_colorB, g_brightness));
   }
+  ledsSendPowerToStrip(s, g_power);
 }
 
 // Añade (o refresca RSSI/nombre de) un resultado de escaneo a la lista
@@ -706,19 +831,19 @@ static void ledsApplySchedule() {
   int wday = tmNow.tm_wday; // 0=Domingo..6=Sabado, igual que ScheduleProgram
 
   bool shouldBeOn = false;
+  int activeProgramIdx = -1; // programa que gana la franja actual (el primero que coincide)
   for (int i = 0; i < LEDS_MAX_PROGRAMS; i++) {
     LedProgram &p = g_programs[i];
+    // Un programa con el checkbox desactivado NUNCA actua, aunque su
+    // horario/dia coincida: es la condicion que manda por encima de todo.
     if (!p.enabled || !p.days[wday]) continue;
     int startMin = p.startHour * 60 + p.startMinute;
     int endMin   = p.endHour * 60 + p.endMinute;
     if (startMin == endMin) continue; // programa vacio, ignorar
-    if (startMin < endMin) {
-      // Tramo normal dentro del mismo dia
-      if (nowMinutes >= startMin && nowMinutes < endMin) shouldBeOn = true;
-    } else {
-      // Tramo que cruza medianoche (ej: 22:00 -> 02:00)
-      if (nowMinutes >= startMin || nowMinutes < endMin) shouldBeOn = true;
-    }
+    bool inRange = (startMin < endMin)
+      ? (nowMinutes >= startMin && nowMinutes < endMin)         // tramo normal
+      : (nowMinutes >= startMin || nowMinutes < endMin);        // cruza medianoche
+    if (inRange) { shouldBeOn = true; activeProgramIdx = i; break; }
   }
 
   // Solo actua si cambia respecto al ultimo estado forzado por el
@@ -726,13 +851,40 @@ static void ledsApplySchedule() {
   // ni generar trafico BLE innecesario.
   if (shouldBeOn != g_scheduleForcedState) {
     g_scheduleForcedState = shouldBeOn;
-    g_power = shouldBeOn;
-    // Abre la ventana que permite a la tarea de reconexion conectar (sin
-    // presencia en la web) las tiras necesarias para aplicar este cambio.
-    g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
-    ledsApplyPowerToAllStrips(g_power);
-    if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
-    Serial.printf("[LEDS] Programa horario: grupo %s\n", g_power ? "ENCENDIDO" : "APAGADO");
+
+    if (shouldBeOn) {
+      // El horario ENCIENDE el grupo: esto siempre gana (asegura que el
+      // programa se cumpla), y a partir de ahora el horario "es dueno"
+      // del power hasta que el o el usuario lo cambien.
+      g_power = true;
+      g_scheduleOwnsPower = true;
+      g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
+      // Color PRIMERO y power ON despues (ver nota en ledsTryConnectStrip):
+      // el color es lo que reactiva la salida de forma fiable en esta tira.
+      if (activeProgramIdx >= 0) {
+        // Aplica el color e intensidad PROPIOS de este programa, no el
+        // color/brillo global (cada programa recuerda los suyos).
+        LedProgram &p = g_programs[activeProgramIdx];
+        g_colorR = p.colorR; g_colorG = p.colorG; g_colorB = p.colorB;
+        g_brightness = p.intensity;
+        ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+        ledsSaveSettings(); // persiste el color/brillo adoptado, por si hay reinicio despues
+      }
+      ledsApplyPowerToAllStrips(true);
+      Serial.println("[LEDS] Programa horario: grupo ENCENDIDO");
+
+    } else if (g_scheduleOwnsPower) {
+      // El horario APAGA el grupo, pero SOLO si fue el propio horario
+      // quien lo habia encendido. Si el grupo esta encendido porque el
+      // usuario lo encendio manualmente (sin ningun programa activo en
+      // ese momento), no lo tocamos: el power manual y el del horario
+      // quedan desacoplados.
+      g_power = false;
+      g_scheduleOwnsPower = false;
+      g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
+      ledsApplyPowerToAllStrips(false);
+      Serial.println("[LEDS] Programa horario: grupo APAGADO");
+    }
   }
 }
 
@@ -813,6 +965,10 @@ static void ledsLoadPrograms() {
     g_programs[i].endMinute   = g_prefs.getUChar((pfx + "em").c_str(), g_programs[i].endMinute);
     uint8_t daysMask = g_prefs.getUChar((pfx + "days").c_str(), 0);
     for (int d = 0; d < 7; d++) g_programs[i].days[d] = (daysMask >> d) & 0x01;
+    g_programs[i].colorR    = g_prefs.getUChar((pfx + "cr").c_str(), g_programs[i].colorR);
+    g_programs[i].colorG    = g_prefs.getUChar((pfx + "cg").c_str(), g_programs[i].colorG);
+    g_programs[i].colorB    = g_prefs.getUChar((pfx + "cb").c_str(), g_programs[i].colorB);
+    g_programs[i].intensity = g_prefs.getUChar((pfx + "in").c_str(), g_programs[i].intensity);
   }
   g_prefs.end();
 }
@@ -829,6 +985,10 @@ static void ledsSavePrograms() {
     uint8_t daysMask = 0;
     for (int d = 0; d < 7; d++) if (g_programs[i].days[d]) daysMask |= (1 << d);
     g_prefs.putUChar((pfx + "days").c_str(), daysMask);
+    g_prefs.putUChar((pfx + "cr").c_str(), g_programs[i].colorR);
+    g_prefs.putUChar((pfx + "cg").c_str(), g_programs[i].colorG);
+    g_prefs.putUChar((pfx + "cb").c_str(), g_programs[i].colorB);
+    g_prefs.putUChar((pfx + "in").c_str(), g_programs[i].intensity);
   }
   g_prefs.end();
 }
@@ -860,10 +1020,14 @@ h2{font-size:11px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase
 .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
 button{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-family:var(--mono);font-size:11px;cursor:pointer;}
 button.active{border-color:var(--amber);color:var(--amber);}
+button.on{border-color:var(--green);color:var(--green);}
 button.back{margin-bottom:8px;}
 input[type=range]{width:100%;}
 input[type=color]{width:44px;height:30px;border:1px solid var(--line);border-radius:4px;background:none;padding:0;}
 input[type=time]{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;font-family:var(--mono);padding:3px 6px;}
+select{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;font-family:var(--mono);padding:3px 6px;font-size:11px;}
+.progrow{display:flex;align-items:center;gap:6px;}
+.progrow label{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--dim);}
 .swatch{width:28px;height:28px;border-radius:4px;border:1px solid var(--line);cursor:pointer;}
 .stripitem{display:flex;justify-content:space-between;align-items:center;padding:6px;border-bottom:1px solid var(--line);font-size:12px;}
 .dim{color:var(--dim);font-size:11px;}
@@ -932,7 +1096,7 @@ function refreshState() {
     el('colorPicker').value = rgbToHex(s.r, s.g, s.b);
     el('brightness').value = s.brightness;
     el('speed').value = s.speed;
-    el('btnPower').className = s.power ? 'active' : '';
+    el('btnPower').className = s.power ? 'on' : '';
     renderEffects();
     renderStrips();
     renderPrograms();
@@ -972,18 +1136,26 @@ function renderStrips() {
   }).join('') || '<div class="dim">Sin tiras emparejadas todavia</div>';
 }
 
+const INTENSITY_STEPS = [10,25,50,75,100];
 function renderPrograms() {
   if (!state.programs) return;
   el('programList').innerHTML = state.programs.map((p,i) => `
     <div class="panel" style="margin-top:6px;">
-      <div class="row">
-        <button class="${p.enabled?'active':''}" onclick="toggleProgram(${i})">PROG ${i+1}: ${p.enabled?'ON':'OFF'}</button>
+      <div class="progrow">
+        <label><input type="checkbox" ${p.enabled?'checked':''} onchange="toggleProgram(${i})"> PROG ${i+1}</label>
         <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
         <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
       </div>
-      <div class="row">
+      <div class="row" style="margin-top:6px;">
         ${DAY_LABELS.map((d,dIdx) =>
           `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${d}</button>`).join('')}
+      </div>
+      <div class="progrow" style="margin-top:6px;">
+        <input type="color" value="${rgbToHex(p.colorR,p.colorG,p.colorB)}" onchange="setProgColor(${i},this.value)">
+        <select onchange="setProgIntensity(${i},this.value)">
+          ${INTENSITY_STEPS.map(v => `<option value="${v}" ${p.intensity===v?'selected':''}>${v}%</option>`).join('')}
+        </select>
+        <button onclick="deleteProgram(${i})">BORRAR</button>
       </div>
     </div>`).join('');
 }
@@ -1000,6 +1172,16 @@ function setProgTime(i, which, value) {
   if (which === 'start') { patch.startHour=h; patch.startMinute=m; }
   else { patch.endHour=h; patch.endMinute=m; }
   post('setProgram', patch);
+}
+function setProgColor(i, hex) {
+  const c = hexToRgb(hex);
+  post('setProgram', {index:i, colorR:c.r, colorG:c.g, colorB:c.b});
+}
+function setProgIntensity(i, value) {
+  post('setProgram', {index:i, intensity: parseInt(value)});
+}
+function deleteProgram(i) {
+  post('deleteProgram', {index:i});
 }
 
 el('btnPower').onclick = () => post('setPower', {power: !state.power});
@@ -1060,6 +1242,10 @@ static String ledsBuildStateJson() {
     o["endMinute"] = g_programs[i].endMinute;
     JsonArray days = o.createNestedArray("days");
     for (int d = 0; d < 7; d++) days.add(g_programs[i].days[d]);
+    o["colorR"] = g_programs[i].colorR;
+    o["colorG"] = g_programs[i].colorG;
+    o["colorB"] = g_programs[i].colorB;
+    o["intensity"] = g_programs[i].intensity;
   }
 
   String out;
@@ -1078,9 +1264,13 @@ static void ledsHandleCommand(const String &jsonStr) {
 
   if (cmd == "setPower") {
     g_power = doc["power"] | g_power;
-    g_scheduleForcedState = g_power; // un cambio manual "adopta" el estado actual
-    ledsApplyPowerToAllStrips(g_power);
+    g_scheduleForcedState = g_power; // adopta el estado, evita que el horario lo pise en la siguiente pasada
+    g_scheduleOwnsPower = false;     // a partir de ahora el power es manual, no del horario
+    // Color PRIMERO y power despues al encender (ver nota en
+    // ledsTryConnectStrip): el color reactiva la salida de forma fiable
+    // en esta tira, el opcode de power ON solo no siempre lo hace.
     if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+    ledsApplyPowerToAllStrips(g_power);
     ledsSaveSettings();
 
   } else if (cmd == "setColor") {
@@ -1154,6 +1344,21 @@ static void ledsHandleCommand(const String &jsonStr) {
         JsonArray days = doc["days"];
         for (int d = 0; d < 7 && d < (int)days.size(); d++) p.days[d] = days[d];
       }
+      if (doc.containsKey("colorR")) p.colorR = doc["colorR"];
+      if (doc.containsKey("colorG")) p.colorG = doc["colorG"];
+      if (doc.containsKey("colorB")) p.colorB = doc["colorB"];
+      if (doc.containsKey("intensity")) p.intensity = constrain((int)doc["intensity"], 0, 100);
+      ledsSavePrograms();
+    }
+
+  } else if (cmd == "deleteProgram") {
+    // Borra el programa (vuelve a sus valores por defecto) y lo deja
+    // desactivado: si estaba forzando el encendido, deja de hacerlo en
+    // la siguiente pasada de ledsApplySchedule().
+    int index = doc["index"] | -1;
+    if (index >= 0 && index < LEDS_MAX_PROGRAMS) {
+      g_programs[index] = LedProgram();
+      g_programs[index].enabled = false;
       ledsSavePrograms();
     }
   }
@@ -1310,6 +1515,9 @@ void ledsLoop() {
 
   // --- Motor de efectos (no bloqueante, respeta la velocidad configurada) ---
   ledsStepEffect();
+
+  // --- Vacia la cola de comandos BLE pendientes por tira (no bloqueante) ---
+  ledsFlushPendingTx();
 
   // --- Programa horario ---
   ledsApplySchedule();
