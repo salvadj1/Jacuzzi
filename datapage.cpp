@@ -208,14 +208,14 @@ function stateAt(samples, ts){
 
 // Bonus termico del dia: grados netos (+/-) ganados o perdidos en T1
 // Jacuzzi, tomando la temperatura cada 15 minutos (no las muestras en
-// bruto, que llegan mas seguido en cada cambio de estado) desde 1 minuto
+// bruto, que llegan mas seguido en cada cambio de estado) desde 5 minutos
 // despues del primer arranque de bomba del dia (auto o manual). Cada
 // tramo de 15 min solo cuenta si la bomba estuvo en marcha al empezar
 // ese tramo; si estaba parada, ese tramo no suma ni resta.
 function bonusTermico(samples){
   const firstOnIdx = samples.findIndex(s=>s[3]!==0);
   if(firstOnIdx<0) return 0; // la bomba no arranco ese dia
-  const startTs = samples[firstOnIdx][0] + 60; // 1 min despues del primer arranque
+  const startTs = samples[firstOnIdx][0] + 300; // 5 min despues del primer arranque
   const endTs = samples[samples.length-1][0];
   if(endTs <= startTs) return 0;
 

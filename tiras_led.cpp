@@ -22,6 +22,9 @@
 #include <Preferences.h>
 #include <NimBLEDevice.h>
 #include <time.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
 // ============================================================================
 // ---------------------------- Configuracion --------------------------------
@@ -32,6 +35,17 @@
 #define LEDS_RECONNECT_MIN_MS  4000  // Backoff de reconexion: minimo
 #define LEDS_RECONNECT_MAX_MS  30000 // Backoff de reconexion: maximo
 #define LEDS_RECONNECT_STEP_MS 4000  // Backoff de reconexion: incremento
+#define LEDS_CONNECT_TIMEOUT_MS 4000 // Timeout maximo para un intento de conexion BLE
+// Limite de conexiones BLE SIMULTANEAS que este firmware intentara abrir.
+// OJO: esto NO es solo un capricho de diseno, es una proteccion real: la
+// libreria NimBLE-Arduino reserva en tiempo de COMPILACION un numero fijo
+// de "slots" de conexion (CONFIG_BT_NIMBLE_MAX_CONNECTIONS, 3 por
+// defecto). Intentar una conexion por encima de ese limite corrompe la
+// pila BLE y reinicia el ESP32. Este valor DEBE ser <= al configurado en
+// nimconfig.h de la libreria (ver comentario en ledsInit()). Se deja en 3
+// porque es el valor por defecto de la libreria sin tocar nada; si subes
+// ese valor en nimconfig.h, sube tambien esta constante a la vez.
+#define LEDS_MAX_CONCURRENT_CONNECTIONS 3
 
 // UUIDs del servicio/caracteristica BLE de las tiras ELK-BLEDOM/MELK/LEDBLE
 static const char* LEDS_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
@@ -100,12 +114,79 @@ static uint8_t  g_speed = 50;         // 0-100 %, a mas valor mas rapido
 static Preferences g_prefs;           // namespace propio en NVS, autocontenido
 
 // --- Escaneo BLE bajo demanda ---
+// El escaneo corre en su PROPIA tarea FreeRTOS (nucleo 0), separada del
+// loop()/WebServer/AsyncTCP (nucleo 1). Se hace con llamadas BLOQUEANTES
+// a NimBLEScan::getResults() en varias pasadas cortas: es el patron que
+// de verdad encuentra los adverts, a diferencia de un scan->start(...)
+// asincrono compitiendo con el resto del sistema en el mismo nucleo.
 static bool      g_scanRunning = false;
-static unsigned long g_scanStopAtMs = 0;
 struct ScanResult { String mac; String name; int rssi; };
 #define LEDS_MAX_SCAN_RESULTS 15
 static ScanResult g_scanResults[LEDS_MAX_SCAN_RESULTS];
 static int        g_scanResultCount = 0;
+// Protege g_scanRunning/g_scanResults/g_scanResultCount: se escriben desde
+// la tarea de escaneo (nucleo 0) y se leen desde el handler HTTP
+// "/api/leds/scanresults" (nucleo 1, dentro de loop()).
+static SemaphoreHandle_t g_scanMutex = nullptr;
+
+// Protege TODAS las llamadas a la API de NimBLE sobre clientes (connect,
+// disconnect, getService, getCharacteristic, writeValue) y los campos
+// client/writeChar/connected de LedStrip. Sin esto, la tarea de
+// reconexion (nucleo 0), los comandos web (tarea AsyncTCP) y los
+// callbacks de NimBLE (su propia tarea interna) pueden tocar el mismo
+// cliente BLE a la vez, lo que provoca cuelgues y reinicios aleatorios.
+static SemaphoreHandle_t g_bleMutex = nullptr;
+
+// --- Presencia del usuario en la pagina "/leds" ---
+// Todo lo relacionado con BLE (escaneo, reconexion, comandos manuales)
+// solo debe ocurrir mientras alguien tiene la pagina "/leds" abierta, para
+// no generar trafico BLE (ni riesgo de coexistencia con el WiFi) cuando
+// nadie la esta viendo. La UNICA excepcion son los programas horarios
+// (encendido/apagado automatico), que deben funcionar siempre.
+static volatile unsigned long g_lastWebPresenceMs = 0;
+// Ventana de tiempo tras un cambio de programa horario durante la que SI
+// se permite conectar/enviar aunque no haya nadie en la pagina: el tiempo
+// justo para que la tarea de reconexion conecte las tiras pendientes y
+// les entregue el nuevo estado.
+static volatile unsigned long g_scheduleWantsConnectionUntilMs = 0;
+
+#define LEDS_PRESENCE_TIMEOUT_MS 3000            // ~2 ciclos del poll de la web (1200ms)
+#define LEDS_SCHEDULE_CONNECT_WINDOW_MS 60000UL  // margen para conectar todas las tiras tras un cambio de programa
+
+// Marca que hay alguien viendo/usando la pagina "/leds" ahora mismo.
+// Llamar desde cualquier endpoint que solo tenga sentido con la pagina
+// abierta (la propia pagina, su poll de estado, sus comandos, el escaneo).
+static void ledsMarkWebPresence() {
+  g_lastWebPresenceMs = millis();
+}
+
+// true si hay alguien con la pagina "/leds" abierta ahora mismo (se ha
+// visto un poll suyo hace menos de LEDS_PRESENCE_TIMEOUT_MS).
+static bool ledsUserPresent() {
+  return (millis() - g_lastWebPresenceMs) < LEDS_PRESENCE_TIMEOUT_MS;
+}
+
+// true si el modulo tiene permiso para usar el radio BLE ahora mismo:
+// o hay alguien en la pagina, o un programa horario acaba de cambiar de
+// estado y todavia esta dentro de su ventana para conectar y aplicarlo.
+static bool ledsBleAllowedNow() {
+  return ledsUserPresent() || (long)(g_scheduleWantsConnectionUntilMs - millis()) > 0;
+}
+
+// Pequena ayuda RAII para no olvidar nunca soltar un mutex, incluso si hay
+// un "return" en medio de la seccion critica. Reutilizable en cualquier
+// otro modulo que necesite el mismo patron con un SemaphoreHandle_t.
+class LedsMutexGuard {
+public:
+  explicit LedsMutexGuard(SemaphoreHandle_t m) : m_mutex(m) {
+    if (m_mutex) xSemaphoreTake(m_mutex, portMAX_DELAY);
+  }
+  ~LedsMutexGuard() {
+    if (m_mutex) xSemaphoreGive(m_mutex);
+  }
+private:
+  SemaphoreHandle_t m_mutex;
+};
 
 // --- Estado interno del motor de efectos (no persistente) ---
 static unsigned long g_effectLastStepMs = 0;
@@ -124,6 +205,7 @@ static void ledsLoadSettings();
 static void ledsSavePrograms();
 static void ledsLoadPrograms();
 static void ledsTryConnectStrip(LedStrip &s);
+static void ledsReconnectTaskFunc(void* pvParameters);
 static void ledsStepEffect();
 static void ledsRegisterWebRoutes();
 static String ledsBuildStateJson();
@@ -216,6 +298,7 @@ static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
   uint8_t sr = ledsScaleChannel(r, g_brightness);
   uint8_t sg = ledsScaleChannel(g, g_brightness);
   uint8_t sb = ledsScaleChannel(b, g_brightness);
+  LedsMutexGuard guard(g_bleMutex);
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
       ledsSendColorToStrip(g_strips[i], sr, sg, sb);
@@ -225,6 +308,7 @@ static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
 
 // Aplica encendido/apagado a todas las tiras conectadas del grupo.
 static void ledsApplyPowerToAllStrips(bool on) {
+  LedsMutexGuard guard(g_bleMutex);
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
       ledsSendPowerToStrip(g_strips[i], on);
@@ -243,6 +327,7 @@ class LedsClientCallbacks : public NimBLEClientCallbacks {
 public:
   explicit LedsClientCallbacks(int stripIndex) : idx(stripIndex) {}
   void onDisconnect(NimBLEClient* client, int reason) override {
+    LedsMutexGuard guard(g_bleMutex);
     if (idx < 0 || idx >= LEDS_MAX_STRIPS) return;
     g_strips[idx].connected = false;
     g_strips[idx].writeChar = nullptr;
@@ -260,19 +345,56 @@ private:
 // "retryDelayMs" y nunca en cada vuelta del loop) una tira concreta del
 // grupo, y localiza su caracteristica de escritura.
 static void ledsTryConnectStrip(LedStrip &s) {
+  LedsMutexGuard guard(g_bleMutex);
   if (s.connected) return;
+
+  // Proteccion critica: nunca abrir mas conexiones BLE simultaneas de las
+  // que la libreria NimBLE tiene reservadas (ver comentario en
+  // LEDS_MAX_CONCURRENT_CONNECTIONS). Si ya estamos al limite, no se
+  // intenta conectar esta tira ahora: se reintentara mas adelante (por si
+  // otra tira se desconecta y libera un hueco), en vez de arriesgarse a
+  // reiniciar el ESP32.
+  int connectedNow = 0;
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].connected) connectedNow++;
+  }
+  if (connectedNow >= LEDS_MAX_CONCURRENT_CONNECTIONS) {
+    s.nextRetryMs = millis() + LEDS_RECONNECT_MIN_MS;
+    return;
+  }
+
   Serial.printf("[LEDS] Conectando con tira %s...\n", s.mac.c_str());
 
   if (s.client == nullptr) {
     s.client = NimBLEDevice::createClient();
+    if (s.client == nullptr) {
+      // No deberia pasar (el contador de arriba ya limita a
+      // LEDS_MAX_CONCURRENT_CONNECTIONS), pero si ocurriera, NUNCA seguir
+      // adelante con un puntero nulo: eso es justo lo que causaba el
+      // panic (StoreProhibited) al añadir la 4a tira.
+      Serial.printf("[LEDS] Sin slots BLE libres para %s, reintentando mas tarde\n", s.mac.c_str());
+      s.nextRetryMs = millis() + LEDS_RECONNECT_MIN_MS;
+      return;
+    }
     int idx = (int)(&s - &g_strips[0]);
     s.client->setClientCallbacks(new LedsClientCallbacks(idx), true);
   }
+  // Sin esto, un intento de conexion a una tira apagada/lejana puede
+  // quedarse colgado con el timeout por defecto de NimBLE (mucho mas
+  // largo), congelando la tarea de reconexion (y antes, cuando esto se
+  // llamaba desde loop(), el sistema entero) durante ese tiempo.
+  s.client->setConnectTimeout(LEDS_CONNECT_TIMEOUT_MS);
 
   NimBLEAddress addr(std::string(s.mac.c_str()), BLE_ADDR_PUBLIC);
   bool ok = s.client->connect(addr);
   if (!ok) {
     Serial.printf("[LEDS] Fallo al conectar con %s\n", s.mac.c_str());
+    // CRITICO: liberar el slot de conexion ahora mismo. Sin este delete,
+    // una tira que nunca responde se queda con su cliente BLE creado para
+    // siempre, ocupando uno de los (pocos) slots de NimBLE de por vida:
+    // exactamente lo que agotaba el pool al llegar a la 4a tira.
+    NimBLEDevice::deleteClient(s.client);
+    s.client = nullptr;
     s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
     s.nextRetryMs = millis() + s.retryDelayMs;
     return;
@@ -282,12 +404,20 @@ static void ledsTryConnectStrip(LedStrip &s) {
   if (service == nullptr) {
     Serial.printf("[LEDS] %s conectada pero sin el servicio esperado\n", s.mac.c_str());
     s.client->disconnect();
+    NimBLEDevice::deleteClient(s.client); // mismo motivo: liberar el slot
+    s.client = nullptr;
+    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
+    s.nextRetryMs = millis() + s.retryDelayMs;
     return;
   }
   s.writeChar = service->getCharacteristic(LEDS_CHAR_UUID);
   if (s.writeChar == nullptr) {
     Serial.printf("[LEDS] %s conectada pero sin la caracteristica esperada\n", s.mac.c_str());
     s.client->disconnect();
+    NimBLEDevice::deleteClient(s.client); // mismo motivo: liberar el slot
+    s.client = nullptr;
+    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
+    s.nextRetryMs = millis() + s.retryDelayMs;
     return;
   }
 
@@ -305,39 +435,84 @@ static void ledsTryConnectStrip(LedStrip &s) {
   }
 }
 
-// Callback de resultados de escaneo BLE: guarda hasta LEDS_MAX_SCAN_RESULTS
-// dispositivos anunciados durante la ventana de escaneo bajo demanda.
-class LedsScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice* dev) override {
-    if (g_scanResultCount >= LEDS_MAX_SCAN_RESULTS) return;
-    String mac = dev->getAddress().toString().c_str();
-    // Evita duplicados del mismo dispositivo durante la misma ventana
-    for (int i = 0; i < g_scanResultCount; i++) {
-      if (g_scanResults[i].mac == mac) return;
+// Añade (o refresca RSSI/nombre de) un resultado de escaneo a la lista
+// compartida. El llamante debe tener ya g_scanMutex tomado.
+static void ledsAddScanResultLocked(const String &mac, const String &name, int rssi) {
+  for (int i = 0; i < g_scanResultCount; i++) {
+    if (g_scanResults[i].mac == mac) {
+      g_scanResults[i].rssi = rssi;
+      if (name.length() > 0) g_scanResults[i].name = name;
+      return;
     }
-    g_scanResults[g_scanResultCount].mac  = mac;
-    g_scanResults[g_scanResultCount].name = dev->haveName() ? dev->getName().c_str() : mac;
-    g_scanResults[g_scanResultCount].rssi = dev->getRSSI();
-    g_scanResultCount++;
   }
-};
-static LedsScanCallbacks g_scanCallbacks;
+  if (g_scanResultCount >= LEDS_MAX_SCAN_RESULTS) return;
+  g_scanResults[g_scanResultCount].mac  = mac;
+  g_scanResults[g_scanResultCount].name = name.length() > 0 ? name : mac;
+  g_scanResults[g_scanResultCount].rssi = rssi;
+  g_scanResultCount++;
+}
 
-// Inicia un escaneo BLE de duracion limitada (LEDS_SCAN_SECONDS). Se
-// invoca solo cuando el usuario pulsa "Buscar tiras" en la web, nunca de
-// forma permanente, para minimizar el impacto sobre el WiFi.
-static void ledsStartScan() {
-  g_scanResultCount = 0;
-  g_scanRunning = true;
-  g_scanStopAtMs = millis() + (LEDS_SCAN_SECONDS * 1000UL);
+// Cuerpo de la tarea FreeRTOS dedicada al escaneo BLE. Se ejecuta en el
+// nucleo 0 (loop()/WebServer/AsyncTCP siguen en el nucleo 1) y usa
+// llamadas BLOQUEANTES a NimBLEScan::getResults() en varias pasadas
+// cortas: mas fiable para capturar adverts que un scan asincrono
+// compitiendo con el resto del sistema en el mismo nucleo. Se borra a si
+// misma (vTaskDelete(NULL)) al terminar.
+static void ledsScanTaskFunc(void* pvParameters) {
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(&g_scanCallbacks, false);
   scan->setActiveScan(true);
-  // Intervalo/ventana moderados: suficientes para encontrar las tiras sin
-  // saturar el radio compartido con el WiFi (ver notas de coexistencia).
-  scan->setInterval(100);
-  scan->setWindow(60);
-  scan->start(LEDS_SCAN_SECONDS, false);
+  // Duty cycle moderado (~50%): un valor demasiado agresivo perjudica la
+  // coexistencia WiFi/BLE (comparten el mismo radio en el ESP32) y hace
+  // perder MAS paquetes de advertising, no menos.
+  scan->setInterval(100); // 100 * 0.625ms = 62.5ms
+  scan->setWindow(50);    // 50  * 0.625ms = 31.25ms (~50% duty cycle)
+
+  const int kPasses = 3;
+  uint32_t passMs = (LEDS_SCAN_SECONDS * 1000UL) / kPasses;
+  if (passMs < 800) passMs = 800;
+
+  for (int pass = 0; pass < kPasses; pass++) {
+    NimBLEScanResults results = scan->getResults(passMs, false);
+
+    LedsMutexGuard guard(g_scanMutex);
+    for (int i = 0; i < results.getCount(); i++) {
+      const NimBLEAdvertisedDevice* dev = results.getDevice(i);
+      if (!dev) continue;
+      String mac  = dev->getAddress().toString().c_str();
+      String name = dev->haveName() ? dev->getName().c_str() : "";
+      ledsAddScanResultLocked(mac, name, dev->getRSSI());
+    }
+    scan->clearResults();
+
+    if (pass < kPasses - 1) vTaskDelay(pdMS_TO_TICKS(80)); // cede CPU real entre pasadas
+  }
+
+  {
+    LedsMutexGuard guard(g_scanMutex);
+    g_scanRunning = false;
+    Serial.printf("[LEDS] Escaneo BLE finalizado, %d dispositivo(s) encontrado(s)\n", g_scanResultCount);
+  }
+
+  vTaskDelete(nullptr);
+}
+
+// Inicia un escaneo BLE de duracion limitada (LEDS_SCAN_SECONDS), en su
+// propia tarea. Se invoca solo cuando el usuario pulsa "Buscar tiras" en
+// la web, nunca de forma permanente, para minimizar el impacto sobre el
+// WiFi. Si ya hay un escaneo en curso, no se lanza uno nuevo.
+static void ledsStartScan() {
+  if (!ledsUserPresent()) return; // el escaneo solo tiene sentido con la pagina abierta
+  {
+    LedsMutexGuard guard(g_scanMutex);
+    if (g_scanRunning) return;
+    g_scanResultCount = 0;
+    g_scanRunning = true;
+  }
+  // Stack 8192 (no 4096): NimBLEScan::getResults() y el parseo de adverts
+  // pueden necesitar mas pila de la que parece a simple vista; con 4096
+  // se arriesga corrupcion silenciosa de pila sin llegar a un panic
+  // completo del sistema.
+  xTaskCreatePinnedToCore(ledsScanTaskFunc, "ledsScan", 8192, nullptr, 1, nullptr, 0);
   Serial.println("[LEDS] Escaneo BLE iniciado");
 }
 
@@ -552,6 +727,9 @@ static void ledsApplySchedule() {
   if (shouldBeOn != g_scheduleForcedState) {
     g_scheduleForcedState = shouldBeOn;
     g_power = shouldBeOn;
+    // Abre la ventana que permite a la tarea de reconexion conectar (sin
+    // presencia en la web) las tiras necesarias para aplicar este cambio.
+    g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
     ledsApplyPowerToAllStrips(g_power);
     if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
     Serial.printf("[LEDS] Programa horario: grupo %s\n", g_power ? "ENCENDIDO" : "APAGADO");
@@ -954,6 +1132,7 @@ static void ledsHandleCommand(const String &jsonStr) {
       seen++;
       if (seen == index) {
         if (g_strips[i].client != nullptr && g_strips[i].connected) {
+          LedsMutexGuard guard(g_bleMutex);
           g_strips[i].client->disconnect();
         }
         g_strips[i] = LedStrip();
@@ -987,27 +1166,36 @@ static void ledsRegisterWebRoutes() {
   AsyncWebServer &server = webServerInstance();
 
   server.on("/leds", HTTP_GET, [](AsyncWebServerRequest *request) {
+    ledsMarkWebPresence();
     request->send_P(200, "text/html", LEDS_HTML);
   });
 
   server.on("/api/leds/state", HTTP_GET, [](AsyncWebServerRequest *request) {
+    ledsMarkWebPresence(); // este es el poll periodico: la senal de presencia principal
     request->send(200, "application/json", ledsBuildStateJson());
   });
 
   server.on("/api/leds/scan", HTTP_POST, [](AsyncWebServerRequest *request) {
+    ledsMarkWebPresence();
     ledsStartScan();
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
   server.on("/api/leds/scanresults", HTTP_GET, [](AsyncWebServerRequest *request) {
+    ledsMarkWebPresence();
     StaticJsonDocument<1024> doc;
-    doc["running"] = g_scanRunning;
-    JsonArray results = doc.createNestedArray("results");
-    for (int i = 0; i < g_scanResultCount; i++) {
-      JsonObject o = results.createNestedObject();
-      o["mac"] = g_scanResults[i].mac;
-      o["name"] = g_scanResults[i].name;
-      o["rssi"] = g_scanResults[i].rssi;
+    {
+      // g_scanRunning/g_scanResults los escribe la tarea de escaneo
+      // (nucleo 0): hay que leerlos bajo el mismo mutex.
+      LedsMutexGuard guard(g_scanMutex);
+      doc["running"] = g_scanRunning;
+      JsonArray results = doc.createNestedArray("results");
+      for (int i = 0; i < g_scanResultCount; i++) {
+        JsonObject o = results.createNestedObject();
+        o["mac"] = g_scanResults[i].mac;
+        o["name"] = g_scanResults[i].name;
+        o["rssi"] = g_scanResults[i].rssi;
+      }
     }
     String out;
     serializeJson(doc, out);
@@ -1019,7 +1207,12 @@ static void ledsRegisterWebRoutes() {
   // reutilizable para cualquier endpoint JSON sobre ESPAsyncWebServer.
   server.on("/api/leds/command", HTTP_POST,
     [](AsyncWebServerRequest *request) {
-      request->send(200, "application/json", "{\"ok\":true}");
+      // No se responde aqui: con ESPAsyncWebServer este callback se
+      // dispara nada mas llegar las cabeceras, antes de que el body (y
+      // por tanto ledsHandleCommand) se haya procesado. Si respondemos
+      // aqui, el propio cliente que envia el comando puede recibir el
+      // "ok" y refrescar el estado ANTES de que se haya aplicado de
+      // verdad. La respuesta real se envia al final del onBody de abajo.
     },
     nullptr,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -1027,7 +1220,9 @@ static void ledsRegisterWebRoutes() {
       if (index == 0) body = "";
       body += String((char*)data).substring(0, len);
       if (index + len == total) {
+        ledsMarkWebPresence();
         ledsHandleCommand(body);
+        request->send(200, "application/json", "{\"ok\":true}");
       }
     });
 }
@@ -1038,6 +1233,22 @@ static void ledsRegisterWebRoutes() {
 
 void ledsInit() {
   Serial.println("[LEDS] Inicializando modulo de tiras LED BLE...");
+  // IMPORTANTE - limite de conexiones BLE simultaneas:
+  // Este firmware nunca abre mas de LEDS_MAX_CONCURRENT_CONNECTIONS (3)
+  // conexiones BLE a la vez, porque la libreria NimBLE-Arduino reserva
+  // ese numero de "slots" en tiempo de compilacion (por defecto 3) y
+  // pasarse de ese numero corrompe la pila BLE y reinicia el ESP32.
+  // Para tener mas tiras conectadas SIMULTANEAMENTE, hay que subir ese
+  // limite en la propia libreria (no se puede desde este .cpp):
+  //   1. Localiza el archivo de tu instalacion de Arduino:
+  //      libraries/NimBLE-Arduino/src/nimconfig.h
+  //   2. Busca la linea "#define CONFIG_BT_NIMBLE_MAX_CONNECTIONS 3"
+  //      y sube el numero (p.ej. a 6, para cubrir LEDS_MAX_STRIPS).
+  //   3. Sube tambien LEDS_MAX_CONCURRENT_CONNECTIONS en este archivo al
+  //      MISMO numero, y vuelve a compilar/flashear.
+
+  g_scanMutex = xSemaphoreCreateMutex();
+  g_bleMutex  = xSemaphoreCreateMutex();
 
   ledsLoadGroup();
   ledsLoadSettings();
@@ -1051,28 +1262,51 @@ void ledsInit() {
 
   ledsRegisterWebRoutes();
 
+  // Tarea de reconexion BLE, separada de loop() (ver ledsReconnectTaskFunc).
+  // Stack 8192, NO 4096: esta tarea hace connect()+getService()+
+  // getCharacteristic() (operaciones GATT reales, no solo escanear). Con
+  // 4096 el stack puede desbordarse de forma silenciosa (sin panic
+  // completo del sistema) y la conexion nunca llega a completarse aunque
+  // el resto del ESP32 siga respondiendo con normalidad.
+  xTaskCreatePinnedToCore(ledsReconnectTaskFunc, "ledsReconnect", 8192, nullptr, 1, nullptr, 0);
+
   Serial.printf("[LEDS] Grupo cargado: %d tira(s), color inicial (%d,%d,%d), brillo %d%%\n",
     [](){ int c=0; for(int i=0;i<LEDS_MAX_STRIPS;i++) if(g_strips[i].used) c++; return c; }(),
     g_colorR, g_colorG, g_colorB, g_brightness);
 }
 
+// Tarea dedicada a la reconexion BLE (nucleo 0), separada por completo de
+// loop()/WebServer/AsyncTCP (nucleo 1). Antes esto se llamaba desde
+// loop(): un connect() lento o sin respuesta bloqueaba TODO el sistema
+// (WiFi, watchdog, web) durante segundos, provocando cuelgues/reinicios.
+static void ledsReconnectTaskFunc(void* pvParameters) {
+  for (;;) {
+    if (ledsBleAllowedNow()) {
+      unsigned long now = millis();
+      for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+        if (g_strips[i].used && !g_strips[i].connected && now >= g_strips[i].nextRetryMs) {
+          ledsTryConnectStrip(g_strips[i]);
+          break; // una tira por vuelta, igual que antes
+        }
+      }
+    } else {
+      // Nadie viendo la pagina y ningun programa horario pendiente:
+      // liberamos las conexiones BLE activas en vez de mantenerlas sin
+      // necesidad (una por vuelta, mismo patron que la reconexion).
+      for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+        if (g_strips[i].used && g_strips[i].connected && g_strips[i].client != nullptr) {
+          LedsMutexGuard guard(g_bleMutex);
+          g_strips[i].client->disconnect();
+          break;
+        }
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));
+  }
+}
+
 void ledsLoop() {
   unsigned long now = millis();
-
-  // --- Reconexion BLE con backoff, una tira por vuelta como mucho, para
-  // no bloquear el loop varias veces seguidas si hay varias tiras caidas ---
-  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-    if (g_strips[i].used && !g_strips[i].connected && now >= g_strips[i].nextRetryMs) {
-      ledsTryConnectStrip(g_strips[i]);
-      break; // solo una por vuelta: mantiene el loop() rapido
-    }
-  }
-
-  // --- Fin de ventana de escaneo bajo demanda ---
-  if (g_scanRunning && now >= g_scanStopAtMs) {
-    g_scanRunning = false;
-    Serial.printf("[LEDS] Escaneo BLE finalizado, %d dispositivo(s) encontrado(s)\n", g_scanResultCount);
-  }
 
   // --- Motor de efectos (no bloqueante, respeta la velocidad configurada) ---
   ledsStepEffect();

@@ -122,7 +122,15 @@ void loop() {
   if (wifiIsConnected()) {
     if (!ntpConfigured) {
       Serial.println("[MAIN] WiFi conectado. Sincronizando hora por NTP...");
-      configTime(3600, 3600, "pool.ntp.org", "time.nist.gov"); // UTC+1 con horario de verano; ajustar segun pais
+      // FIX: configTime(3600,3600,...) fijaba SIEMPRE +2h (como si fuera
+      // horario de verano todo el ano), lo cual es incorrecto de finales
+      // de octubre a finales de marzo (hora de invierno = solo +1h) y
+      // puede colar muestras de madrugada en el dia equivocado en la
+      // grafica del historico. configTzTime() con una cadena TZ POSIX
+      // aplica el cambio de horario automaticamente segun la fecha real.
+      // "CET-1CEST,M3.5.0,M10.5.0/3" = Europa/Madrid (cambia el ultimo
+      // domingo de marzo y el ultimo domingo de octubre, como en la UE).
+      configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
       ntpConfigured = true;
     }
     if (!otaStarted) {

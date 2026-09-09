@@ -100,23 +100,66 @@ static void addEntry(uint8_t flags) {
 
   g_log[g_head] = e;
 
+  // IMPORTANTE: se guarda la posicion fisica ANTES de avanzar g_head,
+  // porque persistChunk() necesita saber que trozo contiene la muestra
+  // que se acaba de escribir (no el siguiente hueco libre).
+  uint16_t writtenAt = g_head;
+  g_head = (g_head + 1) % LOG_CAPACITY;
+  if (g_count < LOG_CAPACITY) g_count++;
+
   // Solo se vuelca a NVS cada DATALOG_PERSIST_EVERY_N muestras (o si el
   // buffer aun no se ha inicializado con ninguna previa), no en cada una:
   // esto es lo que reduce la frecuencia de escritura en flash. El resto
   // del tiempo la muestra vive solo en RAM (g_log) hasta el proximo
   // volcado.
+  //
+  // FIX: persistChunk() se llama AHORA (tras incrementar g_head/g_count),
+  // no antes. Antes se llamaba con los valores VIEJOS, asi que el head/
+  // count guardado en NVS quedaba permanentemente 1 muestra por detras
+  // de la realidad, y cada reinicio volvia a escribir (pisar) la ultima
+  // muestra que ya se habia guardado bien.
   g_samplesSinceFlush++;
   bool shouldFlush = (g_samplesSinceFlush >= DATALOG_PERSIST_EVERY_N);
   if (shouldFlush) {
-    persistChunk(g_head);
+    persistChunk(writtenAt);
     g_samplesSinceFlush = 0;
   }
 
-  g_head = (g_head + 1) % LOG_CAPACITY;
-  if (g_count < LOG_CAPACITY) g_count++;
-
   g_lastFlags = flags;
   g_lastSampleMillis = millis();
+}
+
+// Antiguedad maxima que se conserva en el historico. Sin esto, muestras
+// de una sesion de pruebas muy anterior (ej. semanas atras, si el equipo
+// ha estado mucho tiempo apagado entre sesiones) se quedan en el buffer
+// para siempre, apareciendo como un dia "fantasma" suelto en la grafica
+// aunque el uso normal solo lleve unos pocos dias.
+#define LOG_MAX_AGE_SEC (10UL * 24UL * 3600UL) // 10 dias
+
+// La purga reescribe TODO el historico en NVS (ver datalogDeleteRange),
+// asi que se comprueba con poca frecuencia, no en cada vuelta del loop.
+static unsigned long g_lastPruneCheckMs = 0;
+#define LOG_PRUNE_CHECK_INTERVAL_MS (3600UL * 1000UL) // como mucho 1 vez/hora
+
+// Comprueba si la muestra mas antigua supera LOG_MAX_AGE_SEC y, si es
+// asi, borra todo lo anterior al corte. Reutiliza datalogDeleteRange()
+// (el mismo borrado por rango que usa el boton "BORRAR DIA" de la web).
+static void datalogPruneOldIfNeeded() {
+  unsigned long now = millis();
+  if (now - g_lastPruneCheckMs < LOG_PRUNE_CHECK_INTERVAL_MS) return;
+  g_lastPruneCheckMs = now;
+
+  if (g_count == 0) return;
+  uint32_t nowEpoch = (uint32_t)time(nullptr);
+
+  LogEntry oldest = datalogGet(0);
+  if (oldest.timestamp == 0) return; // entrada invalida, no arriesgarse a borrar de mas
+  if ((uint32_t)(nowEpoch - oldest.timestamp) <= LOG_MAX_AGE_SEC) return; // aun no toca
+
+  uint32_t cutoff = nowEpoch - LOG_MAX_AGE_SEC;
+  Serial.printf("[DATALOG] Purga automatica: borrando muestras de mas de %lu dias\n",
+                LOG_MAX_AGE_SEC / 86400UL);
+  datalogDeleteRange(0, cutoff); // borra [0, cutoff): todo lo anterior al corte
 }
 
 void datalogLoop() {
@@ -124,6 +167,8 @@ void datalogLoop() {
   // timestamp saldria invalido). time(nullptr) por debajo de este umbral
   // significa que el reloj aun no se ha puesto en hora.
   if (time(nullptr) < 1600000000) return;
+
+  datalogPruneOldIfNeeded();
 
   uint8_t flags = currentFlags();
 

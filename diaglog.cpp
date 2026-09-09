@@ -74,10 +74,15 @@ static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
   e.ntcErrors       = ntcErrors;
 
   g_diag[g_head] = e;
-  persistChunk(g_head);
 
+  // Mismo motivo que en datalog.cpp: hay que persistir DESPUES de avanzar
+  // g_head/g_count, o el checkpoint guardado en NVS queda siempre 1
+  // muestra por detras y cada reinicio pisa la ultima ya guardada.
+  uint16_t writtenAt = g_head;
   g_head = (g_head + 1) % DIAG_LOG_CAPACITY_ENTRIES;
   if (g_count < DIAG_LOG_CAPACITY_ENTRIES) g_count++;
+
+  persistChunk(writtenAt);
 
   g_lastSampleMillis = millis();
   g_maxLoopMicros = 0; // arranca de cero para medir el siguiente periodo
