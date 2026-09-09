@@ -25,6 +25,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 
 // ============================================================================
 // ---------------------------- Configuracion --------------------------------
@@ -156,6 +158,10 @@ static SemaphoreHandle_t g_scanMutex = nullptr;
 // callbacks de NimBLE (su propia tarea interna) pueden tocar el mismo
 // cliente BLE a la vez, lo que provoca cuelgues y reinicios aleatorios.
 static SemaphoreHandle_t g_bleMutex = nullptr;
+// Protege g_prefs (NVS/Preferences): se guarda/carga desde la tarea del
+// webserver (comandos), la tarea de reconexion BLE y ledsLoop() (horario),
+// y Preferences no es segura para acceso concurrente entre tareas.
+static SemaphoreHandle_t g_prefsMutex = nullptr;
 
 // --- Presencia del usuario en la pagina "/leds" ---
 // Todo lo relacionado con BLE (escaneo, reconexion, comandos manuales)
@@ -218,7 +224,7 @@ static bool g_scheduleOwnsPower   = false; // true si el power actual (ON) lo pu
 
 // Declaraciones adelantadas (funciones privadas de este archivo)
 static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b);
-static void ledsApplyPowerToAllStrips(bool on);
+static void ledsApplyPowerToAllStrips(bool on, const char *source = "?");
 static void ledsFlushPendingTx();
 static void ledsSaveGroup();
 static void ledsLoadGroup();
@@ -401,8 +407,13 @@ static void ledsSendColorToStrip(LedStrip &s, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 // Envia encendido/apagado a una tira concreta.
-static void ledsSendPowerToStrip(LedStrip &s, bool on) {
+// "source": DIAGNOSTICO TEMPORAL, identifica quien pidio el envio
+// (connect/schedule/comando) para poder ver en el log el origen exacto
+// de cada orden y detectar duplicados. Quitar el parametro cuando ya
+// no haga falta (o dejarlo, es inocuo y reutilizable para trazas futuras).
+static void ledsSendPowerToStrip(LedStrip &s, bool on, const char *source = "?") {
   uint8_t cmd[9] = {0x7E, 0x04, 0x04, (uint8_t)(on ? 0x01 : 0x00), 0x00, 0x00, 0x00, 0x00, 0xEF};
+  Serial.printf("[LEDS][NVS] ledsSendPowerToStrip origen=%s on=%d\n", source, on);
   ledsQueueOrSend(s, cmd, sizeof(cmd), on ? "encendido" : "apagado");
 }
 
@@ -422,11 +433,11 @@ static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 // Aplica encendido/apagado a todas las tiras conectadas del grupo.
-static void ledsApplyPowerToAllStrips(bool on) {
+static void ledsApplyPowerToAllStrips(bool on, const char *source) {
   LedsMutexGuard guard(g_bleMutex);
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
-      ledsSendPowerToStrip(g_strips[i], on);
+      ledsSendPowerToStrip(g_strips[i], on, source);
     }
   }
 }
@@ -447,6 +458,12 @@ public:
     g_strips[idx].connected = false;
     g_strips[idx].writeChar = nullptr;
     g_strips[idx].nextRetryMs = millis() + g_strips[idx].retryDelayMs;
+    // Descarta cualquier comando que quedara en cola sin enviar: si no se
+    // limpia aqui, al reconectar se reenvia un comando obsoleto (de antes
+    // de la desconexion) ademas del nuevo del propio reconnect, causando
+    // duplicados como el "apagado" enviado dos veces.
+    g_strips[idx].pendingCmd  = false;
+    g_strips[idx].pendingCmd2 = false;
     Serial.printf("[LEDS] Tira %s desconectada, reintento en %lums\n",
                   g_strips[idx].mac.c_str(), g_strips[idx].retryDelayMs);
   }
@@ -557,7 +574,7 @@ static void ledsTryConnectStrip(LedStrip &s) {
                              ledsScaleChannel(g_colorG, g_brightness),
                              ledsScaleChannel(g_colorB, g_brightness));
   }
-  ledsSendPowerToStrip(s, g_power);
+  ledsSendPowerToStrip(s, g_power, "connect");
 }
 
 // Añade (o refresca RSSI/nombre de) un resultado de escaneo a la lista
@@ -870,7 +887,7 @@ static void ledsApplySchedule() {
         ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
         ledsSaveSettings(); // persiste el color/brillo adoptado, por si hay reinicio despues
       }
-      ledsApplyPowerToAllStrips(true);
+      ledsApplyPowerToAllStrips(true, "schedule-on");
       Serial.println("[LEDS] Programa horario: grupo ENCENDIDO");
 
     } else if (g_scheduleOwnsPower) {
@@ -882,7 +899,7 @@ static void ledsApplySchedule() {
       g_power = false;
       g_scheduleOwnsPower = false;
       g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
-      ledsApplyPowerToAllStrips(false);
+      ledsApplyPowerToAllStrips(false, "schedule-off");
       Serial.println("[LEDS] Programa horario: grupo APAGADO");
     }
   }
@@ -895,6 +912,7 @@ static void ledsApplySchedule() {
 // ============================================================================
 
 static void ledsLoadGroup() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", true); // solo lectura
   int count = g_prefs.getInt("stripCount", 0);
   for (int i = 0; i < count && i < LEDS_MAX_STRIPS; i++) {
@@ -910,6 +928,7 @@ static void ledsLoadGroup() {
 }
 
 static void ledsSaveGroup() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", false); // lectura/escritura
   int count = 0;
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
@@ -925,6 +944,7 @@ static void ledsSaveGroup() {
 }
 
 static void ledsLoadSettings() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", true);
   g_colorR      = g_prefs.getUChar("r", g_colorR);
   g_colorG      = g_prefs.getUChar("g", g_colorG);
@@ -940,21 +960,30 @@ static void ledsLoadSettings() {
 }
 
 static void ledsSaveSettings() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", false);
-  g_prefs.putUChar("r", g_colorR);
-  g_prefs.putUChar("g", g_colorG);
-  g_prefs.putUChar("b", g_colorB);
-  g_prefs.putUChar("r2", g_colorR2);
-  g_prefs.putUChar("g2", g_colorG2);
-  g_prefs.putUChar("b2", g_colorB2);
-  g_prefs.putUChar("bright", g_brightness);
-  g_prefs.putBool("power", g_power);
-  g_prefs.putUChar("effect", (uint8_t)g_effect);
-  g_prefs.putUChar("speed", g_speed);
+  // DIAGNOSTICO TEMPORAL: putUChar/putBool devuelven el numero de bytes
+  // escritos (0 = fallo, p.ej. NVS sin espacio). Antes no se comprobaba
+  // nada, así que un fallo aqui era invisible. Se puede quitar este
+  // bloque de comprobacion en cuanto se confirme la causa real.
+  size_t wr;
+  wr = g_prefs.putUChar("r", g_colorR);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'r'");
+  wr = g_prefs.putUChar("g", g_colorG);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'g'");
+  wr = g_prefs.putUChar("b", g_colorB);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'b'");
+  wr = g_prefs.putUChar("r2", g_colorR2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'r2'");
+  wr = g_prefs.putUChar("g2", g_colorG2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'g2'");
+  wr = g_prefs.putUChar("b2", g_colorB2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'b2'");
+  wr = g_prefs.putUChar("bright", g_brightness); if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'bright'");
+  wr = g_prefs.putBool("power", g_power);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'power'");
+  wr = g_prefs.putUChar("effect", (uint8_t)g_effect); if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'effect'");
+  wr = g_prefs.putUChar("speed", g_speed);   if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'speed'");
   g_prefs.end();
+  Serial.printf("[LEDS][NVS] Guardado solicitado: power=%d color=(%d,%d,%d) brillo=%d\n",
+                g_power, g_colorR, g_colorG, g_colorB, g_brightness);
 }
 
 static void ledsLoadPrograms() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", true);
   for (int i = 0; i < LEDS_MAX_PROGRAMS; i++) {
     String pfx = "prog" + String(i) + "_";
@@ -974,6 +1003,7 @@ static void ledsLoadPrograms() {
 }
 
 static void ledsSavePrograms() {
+  LedsMutexGuard guard(g_prefsMutex);
   g_prefs.begin("leds", false);
   for (int i = 0; i < LEDS_MAX_PROGRAMS; i++) {
     String pfx = "prog" + String(i) + "_";
@@ -1093,13 +1123,21 @@ function post(cmd, extra) {
 function refreshState() {
   fetch('/api/leds/state').then(r => r.json()).then(s => {
     state = s;
-    el('colorPicker').value = rgbToHex(s.r, s.g, s.b);
+    const active = document.activeElement;
+    // No pisar el <input type="color"> mientras el usuario lo tiene
+    // abierto/enfocado: si no, el navegador cierra el selector nativo en
+    // cada refresco (cada 1.2s), pareciendo que "se esconde solo".
+    if (active !== el('colorPicker')) el('colorPicker').value = rgbToHex(s.r, s.g, s.b);
     el('brightness').value = s.brightness;
     el('speed').value = s.speed;
     el('btnPower').className = s.power ? 'on' : '';
     renderEffects();
     renderStrips();
-    renderPrograms();
+    // renderPrograms() hace innerHTML completo: destruye y recrea los
+    // <input type="time"/"color"> de cada programa. Si el usuario tiene
+    // el foco dentro de la lista (p.ej. el selector de hora abierto), no
+    // se repinta hasta que salga de ahi.
+    if (!el('programList').contains(active)) renderPrograms();
   });
 }
 
@@ -1270,7 +1308,7 @@ static void ledsHandleCommand(const String &jsonStr) {
     // ledsTryConnectStrip): el color reactiva la salida de forma fiable
     // en esta tira, el opcode de power ON solo no siempre lo hace.
     if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
-    ledsApplyPowerToAllStrips(g_power);
+    ledsApplyPowerToAllStrips(g_power, "cmd-setPower");
     ledsSaveSettings();
 
   } else if (cmd == "setColor") {
@@ -1452,13 +1490,28 @@ void ledsInit() {
   //   3. Sube tambien LEDS_MAX_CONCURRENT_CONNECTIONS en este archivo al
   //      MISMO numero, y vuelve a compilar/flashear.
 
-  g_scanMutex = xSemaphoreCreateMutex();
-  g_bleMutex  = xSemaphoreCreateMutex();
+  g_scanMutex   = xSemaphoreCreateMutex();
+  g_bleMutex    = xSemaphoreCreateMutex();
+  g_prefsMutex  = xSemaphoreCreateMutex();
 
   ledsLoadGroup();
   ledsLoadSettings();
   ledsLoadPrograms();
   g_scheduleForcedState = g_power;
+
+  // DIAGNOSTICO TEMPORAL: espacio libre/usado del namespace NVS por
+  // defecto ("nvs"), donde vive todo (leds, wifi, datalog, diaglog...).
+  // Si "free_entries" esta cerca de 0, los put() empiezan a fallar en
+  // silencio (justo el sintoma reportado). Quitar en cuanto se confirme.
+  {
+    nvs_stats_t stats;
+    if (nvs_get_stats(NULL, &stats) == ESP_OK) {
+      Serial.printf("[LEDS][NVS] Particion NVS: total=%d usadas=%d libres=%d namespaces=%d\n",
+                    stats.total_entries, stats.used_entries, stats.free_entries, stats.namespace_count);
+    } else {
+      Serial.println("[LEDS][NVS] No se pudieron leer estadisticas de NVS");
+    }
+  }
 
   NimBLEDevice::init("");
   // MTU moderado: suficiente para los comandos de 7-9 bytes de este

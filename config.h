@@ -104,4 +104,10 @@
 // Guarda periodicamente heap libre, clientes WebSocket, estado WiFi, etc.
 // para poder revisar que paso si el sistema se queda "colgado" otra vez.
 #define DIAG_SAMPLE_INTERVAL_MS (5UL * 60UL * 1000UL) // una muestra cada 5 min
-#define DIAG_LOG_CAPACITY   400 // a 5 min/muestra cubre unos 33h; con eventos extra, mas de un dia largo
+#define DIAG_LOG_CAPACITY   200 // a 5 min/muestra cubre unas 16-17h; reducido de 400 (33h) porque
+                                 // cada muestra ocupa 37 bytes y NVS trocea los blobs en paginas de
+                                 // 32 bytes: con 400 muestras diaglog solo ya se comia ~470 de las
+                                 // ~630 entradas NVS disponibles, dejando casi sin margen a "leds"
+                                 // y demas modulos (causaba fallos silenciosos al guardar color/
+                                 // brillo/power). Debe seguir siendo multiplo de DIAG_CHUNK_ENTRIES
+                                 // (50, en diaglog.cpp) para que el troceado en chunks cuadre.
