@@ -49,7 +49,7 @@
 // nimconfig.h de la libreria (ver comentario en ledsInit()). Se deja en 3
 // porque es el valor por defecto de la libreria sin tocar nada; si subes
 // ese valor en nimconfig.h, sube tambien esta constante a la vez.
-#define LEDS_MAX_CONCURRENT_CONNECTIONS 3
+#define LEDS_MAX_CONCURRENT_CONNECTIONS 6
 
 // UUIDs del servicio/caracteristica BLE de las tiras ELK-BLEDOM/MELK/LEDBLE
 static const char* LEDS_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
