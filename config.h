@@ -100,6 +100,13 @@
 #define WIFI_RETRY_MAX_MS   60000   // tope maximo entre reintentos: 60s
 #define WIFI_RETRY_STEP_MS  10000   // incremento por cada intento fallido
 
+// ---------------- Timeout de sincronizacion NTP ----------------
+// Si hay WiFi conectado pero la hora no se sincroniza por NTP (servidor
+// NTP inalcanzable, DNS caido, etc.) en este tiempo, el ESP32 se reinicia
+// solo para reintentar desde cero, en vez de quedarse horas sin hora
+// valida (afecta al programa horario y al datalog, ver esp32_jacuzzi.ino).
+#define NTP_TIMEOUT_MS (10UL * 60UL * 1000UL) // 10 min de margen tras conectar WiFi
+
 // ---------------- Registro de diagnostico (para investigar cuelgues) ----------------
 // Guarda periodicamente heap libre, clientes WebSocket, estado WiFi, etc.
 // para poder revisar que paso si el sistema se queda "colgado" otra vez.

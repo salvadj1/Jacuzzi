@@ -43,6 +43,7 @@
 SystemState g_state;
 
 static bool ntpConfigured = false;
+static unsigned long ntpConfiguredAtMillis = 0; // cuando se llamo a configTzTime(), para medir el timeout
 static bool otaStarted = false;
 static unsigned long lastBroadcast = 0;
 
@@ -132,6 +133,19 @@ void loop() {
       // domingo de marzo y el ultimo domingo de octubre, como en la UE).
       configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
       ntpConfigured = true;
+      ntpConfiguredAtMillis = millis();
+    }
+    // Si tras NTP_TIMEOUT_MS desde que se pidio la sincronizacion la hora
+    // sigue sin llegar (time(nullptr) por debajo del umbral = epoch invalido),
+    // el ESP32 se reinicia solo: un cliente SNTP colgado (DNS caido,
+    // servidor inalcanzable) puede dejarlo asi durante horas sin volver a
+    // intentarlo por si mismo. El motivo queda registrado en el diagnostico
+    // (breadcrumb DIAG_STAGE_NTP_TIMEOUT) para verlo tras el reinicio.
+    else if (time(nullptr) < 1600000000 && millis() - ntpConfiguredAtMillis > NTP_TIMEOUT_MS) {
+      Serial.println("[MAIN] Hora NTP no sincronizada tras el timeout. Reiniciando...");
+      diaglogSetStage(DIAG_STAGE_NTP_TIMEOUT);
+      delay(200); // margen para que el mensaje salga por el Monitor Serie
+      ESP.restart();
     }
     if (!otaStarted) {
       Serial.println("[MAIN] Habilitando actualizacion OTA...");

@@ -113,12 +113,14 @@ void diaglogInit() {
   Serial.printf("[DIAG] Motivo del ultimo arranque: %s\n", diaglogResetReasonText((uint8_t)reason));
 
   // El breadcrumb solo es fiable si el reset vino de un cuelgue real
-  // (panic/watchdog/brownout); en un encendido normal o reset externo la
-  // RTC RAM puede traer basura de la sesion anterior sin relacion.
+  // (panic/watchdog/brownout) o de un reinicio deliberado por software
+  // (ESP.restart(), p.ej. el de NTP_TIMEOUT en el .ino); en un encendido
+  // normal o reset externo la RTC RAM puede traer basura de la sesion
+  // anterior sin relacion.
   uint8_t crumb = DIAG_STAGE_BOOT;
   if (reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT ||
       reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT ||
-      reason == ESP_RST_BROWNOUT) {
+      reason == ESP_RST_BROWNOUT || reason == ESP_RST_SW) {
     crumb = g_rtcStage;
     Serial.printf("[DIAG] Se quedo colgado en: %s\n", diaglogStageText(crumb));
   }
@@ -169,6 +171,7 @@ const char* diaglogStageText(uint8_t stage) {
     case DIAG_STAGE_WEBSERVER:    return "webServerLoop";
     case DIAG_STAGE_DIAGLOG:      return "diaglogLoop";
     case DIAG_STAGE_BROADCAST:    return "broadcastState";
+    case DIAG_STAGE_NTP_TIMEOUT:  return "Reinicio por falta de hora NTP";
     default:                      return "Desconocido";
   }
 }

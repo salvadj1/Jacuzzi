@@ -894,6 +894,16 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 .progbright input[type=range]{flex:1;}
 .trashbtn{background:none;border:1px solid var(--line);border-radius:4px;width:28px;height:28px;font-size:14px;line-height:1;cursor:pointer;color:var(--red);flex-shrink:0;}
 .clonebtn{width:100%;margin-top:6px;}
+.effgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;}
+.effcard{border:1px solid var(--line);border-radius:6px;padding:8px;}
+.effcatlabel{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+.effpreview{width:100%;height:44px;border-radius:4px;margin-bottom:6px;}
+.effthumbs{display:flex;gap:5px;flex-wrap:wrap;}
+.effthumb{width:22px;height:22px;border-radius:4px;border:1px solid var(--line);cursor:pointer;}
+.effthumb.sel{outline:2px solid var(--dim);outline-offset:1px;}
+.colorpicker-btn{width:28px;height:28px;border-radius:4px;border:1px solid var(--line);position:relative;cursor:pointer;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);}
+.colorpicker-btn input[type=color]{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;padding:0;}
+.colorpreview{width:28px;height:28px;border-radius:4px;border:1px solid var(--line);}
 </style>
 </head>
 <body>
@@ -902,12 +912,15 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 <h1>&#9679; ESP32 &middot; CONTROL TIRAS LED</h1>
 
 <div class="panel">
-  <h2>Encendido y color</h2>
+  <h2>Encendido</h2>
   <div class="row">
     <button id="btnPower">ENCENDER / APAGAR</button>
-    <input type="color" id="colorPicker" value="#ff7800">
+    <div class="colorpreview" id="colorPreview"></div>
   </div>
-  <div class="dim" style="margin-top:8px;">Colores predeterminados</div>
+</div>
+
+<div class="panel">
+  <h2>Colores</h2>
   <div class="row" id="presets"></div>
   <div class="dim" style="margin-top:8px;">Brillo</div>
   <input type="range" id="brightness" min="0" max="100" value="100">
@@ -915,8 +928,11 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 
 <div class="panel">
   <h2>Efectos</h2>
-  <div class="row" id="effects"></div>
-  <div class="dim" style="margin-top:8px;">Velocidad</div>
+  <div class="row" style="margin-bottom:8px;">
+    <button id="btnNoEffect">NINGUNO (color fijo)</button>
+  </div>
+  <div class="effgrid" id="effects"></div>
+  <div class="dim" style="margin-top:10px;">Velocidad</div>
   <input type="range" id="speed" min="0" max="100" value="50">
 </div>
 
@@ -939,12 +955,182 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 const el = id => document.getElementById(id);
 // Efectos NATIVOS que ejecuta la propia tira por hardware (indice 0 =
 // "Ninguno", color estatico). El indice de este array coincide con
-// state.effect (ver g_effect / LEDS_HW_EFFECT_CODES en el backend).
-const EFFECTS = ["Ninguno","Salto RGB","Salto multicolor","Crossfade RGB","Crossfade multicolor",
-  "Crossfade rojo","Crossfade verde","Crossfade azul","Crossfade amarillo","Crossfade cian",
-  "Crossfade magenta","Crossfade blanco","Crossfade rojo+verde","Crossfade rojo+azul","Crossfade verde+azul",
-  "Blink multicolor","Blink rojo","Blink verde","Blink azul","Blink amarillo","Blink cian",
-  "Blink magenta","Blink blanco"];
+// Efectos NATIVOS que ejecuta la propia tira por hardware. El indice de
+// EFFECTS_FLAT (1..LEDS_HW_EFFECT_COUNT) coincide con state.effect (ver
+// g_effect / LEDS_HW_EFFECT_CODES en el backend). Agrupados por tipo
+// (salto / crossfade / blink) solo para la interfaz; "colors" es la
+// aproximacion visual usada en el preview animado, no afecta al hardware.
+const EFF_CATS = [
+  { key:'salto', label:'Saltos', items:[
+    {name:'Salto RGB', colors:['#ff0000','#00ff00','#0000ff']},
+    {name:'Salto multicolor', colors:['#ff0000','#00ff00','#0000ff','#ffff00','#ff00ff','#00ffff']},
+  ]},
+  { key:'cross', label:'Crossfade', items:[
+    {name:'Crossfade RGB', colors:['#ff0000','#00ff00','#0000ff']},
+    {name:'Crossfade multicolor', colors:['#ff0000','#ff7800','#ffff00','#00ff00','#00ffff','#0000ff','#ff00ff']},
+    {name:'Crossfade rojo', colors:['#ff0000','#550000']},
+    {name:'Crossfade verde', colors:['#00ff00','#003300']},
+    {name:'Crossfade azul', colors:['#0000ff','#000055']},
+    {name:'Crossfade amarillo', colors:['#ffff00','#333300']},
+    {name:'Crossfade cian', colors:['#00ffff','#003333']},
+    {name:'Crossfade magenta', colors:['#ff00ff','#330033']},
+    {name:'Crossfade blanco', colors:['#ffffff','#444444']},
+    {name:'Crossfade rojo+verde', colors:['#ff8800','#331a00']},
+    {name:'Crossfade verde+azul', colors:['#88ff00','#223300']},
+  ]},
+  { key:'blink', label:'Blink', items:[
+    {name:'Blink multicolor', colors:['#ff0000','#00ff00','#0000ff','#ffff00','#ff00ff','#00ffff']},
+    {name:'Blink rojo', colors:['#ff0000']},
+    {name:'Blink verde', colors:['#00ff00']},
+    {name:'Blink azul', colors:['#0000ff']},
+    {name:'Blink amarillo', colors:['#ffff00']},
+    {name:'Blink cian', colors:['#00ffff']},
+    {name:'Blink magenta', colors:['#ff00ff']},
+    {name:'Blink blanco', colors:['#ffffff']},
+  ]},
+];
+// EFFECTS_FLAT: mismo orden que LEDS_HW_EFFECT_CODES en el backend, para
+// mapear cada item a su indice real 1..22 de state.effect.
+const EFFECTS_FLAT = [].concat(...EFF_CATS.map(c => c.items.map(it => Object.assign({cat:c.key, type:c.key}, it))));
+EFFECTS_FLAT.forEach((e,i) => e.index = i + 1);
+
+const EFF_ANIM_MS = 5000;
+// Tras los primeros EFF_ANIM_MS desde que carga la pagina, las previas no
+// seleccionadas dejan de reiniciar su animacion en cada poll de refreshState
+// (cada ~1.2s) y se quedan fijas en su color; si no, parpadearian sin parar.
+setTimeout(() => { effInitialAnimDone = true; }, EFF_ANIM_MS);
+let effSpeedPct = 50;
+let effSelectedIdx = {};  // cat.key -> indice dentro de la categoria (para el preview)
+let effLastChangedCat = null; // categoria que se dejo en bucle tras seleccionar
+let previewedEffectIndex = null; // ultimo efecto animado en colorPreview (evita reiniciar la animacion en cada poll)
+let effInitialAnimDone = false; // true tras los primeros EFF_ANIM_MS: las previas no seleccionadas dejan de reiniciar su animacion en cada poll
+const effStyleCache = {};
+
+function effCycleDurMs(e) {
+  const t = effSpeedPct / 100;
+  const min = e.type === 'blink' ? 180 : 260;
+  const max = e.type === 'blink' ? 2600 : 6000;
+  return Math.round(max - t * (max - min));
+}
+function effBaseColor(e) {
+  return e.type === 'blink'
+    ? (e.colors.length > 1 ? 'linear-gradient(90deg,' + e.colors.join(',') + ')' : e.colors[0])
+    : e.colors[0];
+}
+function effEnsureKeyframes(e) {
+  const id = 'ekf' + e.colors.join('').replace(/[^a-z0-9]/gi, '') + e.type;
+  if (effStyleCache[id]) return id;
+  const cols = e.colors;
+  let rule;
+  if (e.type === 'salto') {
+    const steps = cols.map((c, i) => `${Math.round(i / cols.length * 100)}%{background:${c}}`).join('');
+    rule = `@keyframes ${id}{${steps}100%{background:${cols[0]}}}`;
+  } else if (e.type === 'cross') {
+    const steps = cols.concat([cols[0]]).map((c, i, arr) => `${Math.round(i / (arr.length - 1) * 100)}%{background:${c}}`).join('');
+    rule = `@keyframes ${id}{${steps}}`;
+  } else {
+    rule = `@keyframes ${id}{0%,49%{opacity:1}50%,100%{opacity:.1}}`;
+  }
+  const styleEl = document.createElement('style');
+  styleEl.textContent = rule;
+  document.head.appendChild(styleEl);
+  effStyleCache[id] = true;
+  return id;
+}
+// runEffAnimation: con loop=false anima 4s y se deja fija en el ultimo
+// color; con loop=true (categoria seleccionada) anima en bucle indefinido.
+function runEffAnimation(elem, e, loop) {
+  const id = effEnsureKeyframes(e);
+  const cycleMs = effCycleDurMs(e);
+  elem.style.animation = 'none';
+  void elem.offsetWidth;
+  clearTimeout(elem._stopTimer);
+  if (loop) {
+    elem.style.animation = `${id} ${cycleMs}ms linear infinite`;
+    return;
+  }
+  const iterations = Math.max(1, Math.round(EFF_ANIM_MS / cycleMs));
+  elem.style.animation = `${id} ${cycleMs}ms linear ${iterations}`;
+  elem._stopTimer = setTimeout(() => {
+    elem.style.animation = 'none';
+    elem.style.background = effBaseColor(e);
+  }, iterations * cycleMs);
+}
+
+// updateColorPreview: muestra en la previa junto al boton de encendido el
+// efecto activo (animado en bucle, igual que la categoria seleccionada en
+// el panel de Efectos) o, si no hay efecto (g_effect==0), el color plano
+// actual. state.effect ya se guarda en NVS en el backend igual que color/
+// brillo/velocidad, asi que esta previa refleja lo persistido al recargar.
+function updateColorPreview(s) {
+  const preview = el('colorPreview');
+  if (s.effect > 0) {
+    const e = EFFECTS_FLAT[s.effect - 1];
+    if (previewedEffectIndex !== s.effect) {
+      previewedEffectIndex = s.effect;
+      runEffAnimation(preview, e, true);
+    }
+  } else {
+    if (previewedEffectIndex !== null) {
+      previewedEffectIndex = null;
+      preview.style.animation = 'none';
+      clearTimeout(preview._stopTimer);
+    }
+    preview.style.background = rgbToHex(s.r, s.g, s.b);
+  }
+}
+
+function renderEffects() {
+  const stage = el('effects');
+  stage.innerHTML = '';
+  el('btnNoEffect').className = state.effect === 0 ? 'active' : '';
+  EFF_CATS.forEach(cat => {
+    const selIdx = effSelectedIdx[cat.key] || 0;
+    const e0 = Object.assign({ type: cat.key }, cat.items[selIdx]);
+
+    const card = document.createElement('div');
+    card.className = 'effcard';
+
+    const label = document.createElement('div');
+    label.className = 'effcatlabel';
+    label.textContent = cat.label;
+    card.appendChild(label);
+
+    const preview = document.createElement('div');
+    preview.className = 'effpreview';
+    preview.style.background = effBaseColor(e0);
+    card.appendChild(preview);
+    if (cat.key === effLastChangedCat) runEffAnimation(preview, e0, true);
+    else if (!effInitialAnimDone) runEffAnimation(preview, e0, false);
+    else preview.style.background = effBaseColor(e0);
+
+    const thumbRow = document.createElement('div');
+    thumbRow.className = 'effthumbs';
+    cat.items.forEach((it, i) => {
+      const e = Object.assign({ type: cat.key }, it);
+      const flatIdx = EFFECTS_FLAT.findIndex(f => f.name === it.name);
+      const th = document.createElement('div');
+      th.className = 'effthumb' + (i === selIdx && cat.key === effLastChangedCat ? ' sel' : '');
+      th.style.background = effBaseColor(e);
+      th.title = it.name;
+      th.onmouseenter = () => runEffAnimation(th, e, false);
+      th.onclick = () => {
+        effSelectedIdx[cat.key] = i;
+        effLastChangedCat = cat.key;
+        post('setEffect', { effect: EFFECTS_FLAT[flatIdx].index });
+        renderEffects();
+      };
+      thumbRow.appendChild(th);
+    });
+    card.appendChild(thumbRow);
+    stage.appendChild(card);
+  });
+}
+el('btnNoEffect').onclick = () => { effLastChangedCat = null; post('setEffect', { effect: 0 }); };
+el('speed').addEventListener('input', () => {
+  effSpeedPct = parseInt(el('speed').value);
+  if (effLastChangedCat !== null) renderEffects();
+});
 const PRESETS = ["#ff0000","#ff7800","#ffff00","#00ff00","#00ffff","#0000ff","#ff00ff","#ffffff"];
 const DAY_LABELS = ["D","L","M","X","J","V","S"];
 let state = {};
@@ -963,6 +1149,7 @@ function refreshState() {
     // abierto/enfocado: si no, el navegador cierra el selector nativo en
     // cada refresco (cada 1.2s), pareciendo que "se esconde solo".
     if (active !== el('colorPicker')) el('colorPicker').value = rgbToHex(s.r, s.g, s.b);
+    updateColorPreview(s);
     el('brightness').value = s.brightness;
     el('speed').value = s.speed;
     el('btnPower').className = s.power ? 'on' : '';
@@ -985,17 +1172,14 @@ function rgbToHex(r,g,b){ return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,
 function hexToRgb(hex){ const n=parseInt(hex.slice(1),16); return {r:(n>>16)&255, g:(n>>8)&255, b:n&255}; }
 
 function renderPresets() {
-  el('presets').innerHTML = PRESETS.map(c =>
+  const pickerHtml = `<div class="colorpicker-btn"><input type="color" id="colorPicker" value="#ff7800"></div>`;
+  el('presets').innerHTML = pickerHtml + PRESETS.map(c =>
     `<div class="swatch" style="background:${c}" onclick="applyColor('${c}')"></div>`).join('');
+  el('colorPicker').onchange = () => applyColor(el('colorPicker').value);
 }
 function applyColor(hex) {
   const c = hexToRgb(hex);
   post('setColor', {r:c.r, g:c.g, b:c.b});
-}
-
-function renderEffects() {
-  el('effects').innerHTML = EFFECTS.map((name,i) =>
-    `<button class="${state.effect===i?'active':''}" onclick="post('setEffect',{effect:${i}})">${name}</button>`).join('');
 }
 
 function renderStrips() {
@@ -1038,7 +1222,7 @@ function renderPrograms() {
           <label><input type="checkbox" ${p.enabled?'checked':''} onchange="toggleProgram(${i})"> <span class="progstatus ${p.enabled?'on':'off'}">${p.enabled?'ON':'OFF'}</span></label>
           ${i>0 ? `<button class="trashbtn" title="Eliminar programa" onclick="deleteProgram(${i})">&#128465;</button>` : ''}
         </div>
-        <span class="progtitle">${i===0?'PROGRAMA MAESTRO':'PROGRAMA '+(i+1)}</span>
+        <span class="progtitle" ${i===0?'style="color:#ffff00;"':''}>${i===0?'PROGRAMA MAESTRO':'PROGRAMA '+(i+1)}</span>
         <div class="progtimes">
           <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
           <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
@@ -1110,7 +1294,6 @@ function deleteProgram(i) {
 }
 
 el('btnPower').onclick = () => post('setPower', {power: !state.power});
-el('colorPicker').onchange = () => applyColor(el('colorPicker').value);
 el('brightness').onchange = () => post('setBrightness', {value: parseInt(el('brightness').value)});
 el('speed').onchange = () => post('setSpeed', {value: parseInt(el('speed').value)});
 
