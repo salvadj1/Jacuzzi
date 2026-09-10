@@ -55,25 +55,18 @@
 static const char* LEDS_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 static const char* LEDS_CHAR_UUID    = "0000fff3-0000-1000-8000-00805f9b34fb";
 
-// Los 15 efectos acordados. NONE = color estatico sin animacion.
-enum LedEffect {
-  EFFECT_NONE = 0,
-  EFFECT_FLASH,
-  EFFECT_FADE_2COLOR,
-  EFFECT_BREATH,
-  EFFECT_RAINBOW,
-  EFFECT_BLINK,
-  EFFECT_CHASE,
-  EFFECT_FADE_MULTI,
-  EFFECT_SPARKLE,
-  EFFECT_COLOR_WIPE,
-  EFFECT_TWINKLE,
-  EFFECT_PULSE,
-  EFFECT_ALTERNATE,
-  EFFECT_FIRE,
-  EFFECT_MUSIC_SIM,
-  EFFECT_COUNT // centinela: numero total de efectos
+// 21 efectos NATIVOS de hardware que la propia tira ejecuta por si sola
+// (documentados por ingenieria inversa del protocolo ELK-BLEDOM/LEDBLE,
+// variante de comando 0x07, la que usan estas tiras para efectos aunque
+// color/power vayan por la variante 0x00). g_effect = 0 significa "sin
+// efecto" (color estatico); g_effect = 1..LEDS_HW_EFFECT_COUNT indexa LEDS_HW_EFFECT_CODES
+// (index-1). Reutilizable en cualquier proyecto con esta misma tira.
+#define LEDS_HW_EFFECT_COUNT 22
+static const uint8_t LEDS_HW_EFFECT_CODES[LEDS_HW_EFFECT_COUNT] = {
+  0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x90, 0x91,
+  0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0x9B, 0x9C
 };
+
 
 // ============================================================================
 // ------------------------------ Estructuras ---------------------------------
@@ -127,11 +120,10 @@ static LedStrip    g_strips[LEDS_MAX_STRIPS];
 static LedProgram  g_programs[LEDS_MAX_PROGRAMS];
 
 static uint8_t  g_colorR = 255, g_colorG = 120, g_colorB = 0; // color base actual
-static uint8_t  g_colorR2 = 0,  g_colorG2 = 0,  g_colorB2 = 255; // segundo color (fades/alternancia)
 static uint8_t  g_brightness = 100;   // 0-100 %
 static bool     g_power = false;      // ON/OFF general del grupo
-static LedEffect g_effect = EFFECT_NONE;
-static uint8_t  g_speed = 50;         // 0-100 %, a mas valor mas rapido
+static uint8_t  g_effect = 0;         // 0 = sin efecto (color estatico); 1..LEDS_HW_EFFECT_COUNT = efecto nativo
+static uint8_t  g_speed = 50;         // 0-100 %, velocidad nativa del efecto en curso (solo aplica si g_effect>0)
 
 static Preferences g_prefs;           // namespace propio en NVS, autocontenido
 
@@ -214,10 +206,6 @@ private:
   SemaphoreHandle_t m_mutex;
 };
 
-// --- Estado interno del motor de efectos (no persistente) ---
-static unsigned long g_effectLastStepMs = 0;
-static uint16_t g_effectStep = 0; // contador de pasos generico, cada efecto lo interpreta a su manera
-
 // --- Estado de aplicacion del programa horario (para no repetir logs/acciones) ---
 static bool g_scheduleForcedState = false; // ultimo estado ON/OFF calculado por el horario (para detectar cambios)
 static bool g_scheduleOwnsPower   = false; // true si el power actual (ON) lo puso el horario, no el usuario
@@ -225,6 +213,7 @@ static bool g_scheduleOwnsPower   = false; // true si el power actual (ON) lo pu
 // Declaraciones adelantadas (funciones privadas de este archivo)
 static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b);
 static void ledsApplyPowerToAllStrips(bool on, const char *source = "?");
+static void ledsApplyEffectToAllStrips(uint8_t effectIndex);
 static void ledsFlushPendingTx();
 static void ledsSaveGroup();
 static void ledsLoadGroup();
@@ -234,7 +223,6 @@ static void ledsSavePrograms();
 static void ledsLoadPrograms();
 static void ledsTryConnectStrip(LedStrip &s);
 static void ledsReconnectTaskFunc(void* pvParameters);
-static void ledsStepEffect();
 static void ledsRegisterWebRoutes();
 static String ledsBuildStateJson();
 
@@ -249,49 +237,6 @@ static String ledsBuildStateJson();
 // cualquier efecto o conversion de color en proyectos con LEDs.
 static uint8_t ledsScaleChannel(uint8_t value, uint8_t brightnessPct) {
   return (uint8_t)((uint16_t)value * brightnessPct / 100);
-}
-
-// Interpola linealmente entre dos valores de 0-255 segun una fase 0.0-1.0.
-// Reutilizable en cualquier efecto de fade/transicion de color.
-static uint8_t ledsLerp(uint8_t a, uint8_t b, float phase) {
-  if (phase < 0) phase = 0;
-  if (phase > 1) phase = 1;
-  return (uint8_t)(a + (b - a) * phase);
-}
-
-// Convierte un valor de "velocidad" (0-100, a mas valor mas rapido) en un
-// intervalo en milisegundos entre pasos de animacion. Reutilizable en
-// cualquier motor de efectos LED con control de velocidad por slider.
-static uint16_t ledsSpeedToIntervalMs(uint8_t speedPct, uint16_t minMs, uint16_t maxMs) {
-  if (speedPct > 100) speedPct = 100;
-  // A velocidad 100 -> minMs (rapido). A velocidad 0 -> maxMs (lento).
-  return (uint16_t)(maxMs - ((uint32_t)(maxMs - minMs) * speedPct / 100));
-}
-
-// Genera un color HSV->RGB simple (H:0-359, S/V:0-255). Reutilizable para
-// cualquier efecto tipo arcoiris/rainbow en proyectos con LEDs RGB.
-static void ledsHsvToRgb(uint16_t h, uint8_t s, uint8_t v, uint8_t &r, uint8_t &g, uint8_t &b) {
-  h = h % 360;
-  float hf = h / 60.0f;
-  float sf = s / 255.0f;
-  float vf = v / 255.0f;
-  int i = (int)hf;
-  float f = hf - i;
-  float p = vf * (1 - sf);
-  float q = vf * (1 - sf * f);
-  float t = vf * (1 - sf * (1 - f));
-  float rf, gf, bf;
-  switch (i % 6) {
-    case 0: rf = vf; gf = t;  bf = p;  break;
-    case 1: rf = q;  gf = vf; bf = p;  break;
-    case 2: rf = p;  gf = vf; bf = t;  break;
-    case 3: rf = p;  gf = q;  bf = vf; break;
-    case 4: rf = t;  gf = p;  bf = vf; break;
-    default:rf = vf; gf = p;  bf = q;  break;
-  }
-  r = (uint8_t)(rf * 255);
-  g = (uint8_t)(gf * 255);
-  b = (uint8_t)(bf * 255);
 }
 
 // ============================================================================
@@ -442,6 +387,45 @@ static void ledsApplyPowerToAllStrips(bool on, const char *source) {
   }
 }
 
+// Envia el comando de efecto NATIVO (variante 0x07 del protocolo) a una
+// tira concreta: la propia tira ejecuta la animacion por hardware, sin
+// que el ESP32 tenga que enviar pasos intermedios. "code" es uno de los
+// valores de LEDS_HW_EFFECT_CODES. Reutilizable para cualquier tira
+// ELK-BLEDOM/LEDBLE que acepte esta variante de comando de efectos.
+static void ledsSendEffectToStrip(LedStrip &s, uint8_t code) {
+  uint8_t cmd[9] = {0x7E, 0x07, 0x03, code, 0x03, 0xFF, 0xFF, 0x00, 0xEF};
+  char desc[24];
+  snprintf(desc, sizeof(desc), "efecto hw 0x%02X", code);
+  ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
+}
+
+// Envia la velocidad NATIVA (0-100%) del efecto en curso a una tira
+// concreta. Solo tiene efecto visible mientras la tira esta ejecutando
+// un efecto de hardware (ver ledsSendEffectToStrip). Reutilizable igual
+// que la funcion anterior.
+static void ledsSendEffectSpeedToStrip(LedStrip &s, uint8_t speedPct) {
+  uint8_t cmd[9] = {0x7E, 0x07, 0x02, speedPct, 0xFF, 0xFF, 0xFF, 0x00, 0xEF};
+  char desc[24];
+  snprintf(desc, sizeof(desc), "velocidad efecto %u%%", speedPct);
+  ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
+}
+
+// Aplica un efecto de hardware (indice 1..LEDS_HW_EFFECT_COUNT) a todas
+// las tiras conectadas, seguido de la velocidad actual. effectIndex==0
+// no deberia llegar aqui (ver ledsHandleCommand/ledsApplySchedule: el
+// caso 0 aplica color estatico en su lugar, via ledsApplyColorToAllStrips).
+static void ledsApplyEffectToAllStrips(uint8_t effectIndex) {
+  if (effectIndex == 0 || effectIndex > LEDS_HW_EFFECT_COUNT) return;
+  uint8_t code = LEDS_HW_EFFECT_CODES[effectIndex - 1];
+  LedsMutexGuard guard(g_bleMutex);
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].connected) {
+      ledsSendEffectToStrip(g_strips[i], code);
+      ledsSendEffectSpeedToStrip(g_strips[i], g_speed);
+    }
+  }
+}
+
 // ============================================================================
 // ----------------------------- Conexion BLE ----------------------------------
 // ============================================================================
@@ -562,17 +546,23 @@ static void ledsTryConnectStrip(LedStrip &s) {
   s.nextTxAllowedMs = millis() + LEDS_CONNECT_SETTLE_MS;
   Serial.printf("[LEDS] Tira %s conectada correctamente\n", s.mac.c_str());
 
-  // Al reconectar, se encola el reenvio del estado actual (color/brillo/
-  // on-off vigentes) para que la tira quede igual que el resto del grupo.
-  // Se enviara en cuanto pase el margen de asentamiento, desde ledsLoop().
-  // IMPORTANTE: si hay que encender, el COLOR va primero y el opcode de
-  // "power ON" despues (orden invertido a proposito): en esta tira en
-  // concreto el opcode de encendido solo, sin color, no siempre reactiva
-  // la salida; el comando de color si la reactiva de forma fiable.
+  // Al reconectar, se encola el reenvio del estado actual (color/efecto/
+  // brillo/on-off vigentes) para que la tira quede igual que el resto del
+  // grupo. Se enviara en cuanto pase el margen de asentamiento, desde
+  // ledsLoop(). IMPORTANTE: si hay que encender, el color/efecto va
+  // primero y el opcode de "power ON" despues (orden invertido a
+  // proposito): en esta tira en concreto el opcode de encendido solo,
+  // sin color, no siempre reactiva la salida; el comando de color/efecto
+  // si la reactiva de forma fiable.
   if (g_power) {
-    ledsSendColorToStrip(s, ledsScaleChannel(g_colorR, g_brightness),
-                             ledsScaleChannel(g_colorG, g_brightness),
-                             ledsScaleChannel(g_colorB, g_brightness));
+    if (g_effect == 0) {
+      ledsSendColorToStrip(s, ledsScaleChannel(g_colorR, g_brightness),
+                               ledsScaleChannel(g_colorG, g_brightness),
+                               ledsScaleChannel(g_colorB, g_brightness));
+    } else {
+      ledsSendEffectToStrip(s, LEDS_HW_EFFECT_CODES[g_effect - 1]);
+      ledsSendEffectSpeedToStrip(s, g_speed);
+    }
   }
   ledsSendPowerToStrip(s, g_power, "connect");
 }
@@ -656,180 +646,6 @@ static void ledsStartScan() {
   // completo del sistema.
   xTaskCreatePinnedToCore(ledsScanTaskFunc, "ledsScan", 8192, nullptr, 1, nullptr, 0);
   Serial.println("[LEDS] Escaneo BLE iniciado");
-}
-
-// ============================================================================
-// -------------------------------- Efectos -------------------------------------
-// Motor de efectos no bloqueante: se llama en cada vuelta de ledsLoop(),
-// pero solo actua cuando ha pasado el intervalo correspondiente a la
-// velocidad configurada (g_speed). Ningun efecto usa delay().
-// ============================================================================
-static void ledsStepEffect() {
-  if (!g_power || g_effect == EFFECT_NONE) return;
-
-  // Cada efecto define su propio rango de velocidad (algunos necesitan
-  // pasos mas rapidos que otros para verse bien).
-  uint16_t interval;
-  switch (g_effect) {
-    case EFFECT_FLASH:      interval = ledsSpeedToIntervalMs(g_speed, 40, 800);  break;
-    case EFFECT_BLINK:      interval = ledsSpeedToIntervalMs(g_speed, 150, 1500); break;
-    case EFFECT_SPARKLE:    interval = ledsSpeedToIntervalMs(g_speed, 30, 400);  break;
-    case EFFECT_TWINKLE:    interval = ledsSpeedToIntervalMs(g_speed, 80, 600);  break;
-    case EFFECT_MUSIC_SIM:  interval = ledsSpeedToIntervalMs(g_speed, 60, 500);  break;
-    default:                interval = ledsSpeedToIntervalMs(g_speed, 20, 200);  break;
-  }
-
-  unsigned long now = millis();
-  if (now - g_effectLastStepMs < interval) return;
-  g_effectLastStepMs = now;
-  g_effectStep++;
-
-  uint8_t r = g_colorR, g = g_colorG, b = g_colorB;
-
-  switch (g_effect) {
-
-    case EFFECT_FLASH: {
-      // Destello breve: alterna color a full brillo y apagado
-      bool on = (g_effectStep % 2) == 0;
-      if (on) ledsApplyColorToAllStrips(255, 255, 255);
-      else    ledsApplyColorToAllStrips(0, 0, 0);
-      return; // ya aplicado con brillo propio del efecto, no re-escalar abajo
-    }
-
-    case EFFECT_FADE_2COLOR: {
-      // Transicion suave y ciclica entre color 1 y color 2
-      float phase = (sinf(g_effectStep * 0.05f) + 1.0f) / 2.0f;
-      r = ledsLerp(g_colorR, g_colorR2, phase);
-      g = ledsLerp(g_colorG, g_colorG2, phase);
-      b = ledsLerp(g_colorB, g_colorB2, phase);
-      break;
-    }
-
-    case EFFECT_BREATH: {
-      // "Respiracion": el color base sube y baja de brillo suavemente
-      float phase = (sinf(g_effectStep * 0.08f) + 1.0f) / 2.0f; // 0..1
-      uint8_t localBrightness = (uint8_t)(20 + phase * 80); // nunca a 0 total, se ve mejor
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, localBrightness),
-                                 ledsScaleChannel(g, localBrightness),
-                                 ledsScaleChannel(b, localBrightness));
-      return;
-    }
-
-    case EFFECT_RAINBOW: {
-      // Ciclo continuo por todo el espectro de color
-      uint16_t hue = (g_effectStep * 4) % 360;
-      ledsHsvToRgb(hue, 255, 255, r, g, b);
-      break;
-    }
-
-    case EFFECT_BLINK: {
-      // Parpadeo simple on/off del color base (mas marcado que el flash)
-      bool on = (g_effectStep % 2) == 0;
-      ledsApplyColorToAllStrips(on ? r : 0, on ? g : 0, on ? b : 0);
-      return;
-    }
-
-    case EFFECT_CHASE: {
-      // Persecucion simulada mediante variacion ciclica de intensidad
-      // (en tiras de un solo canal de color por segmento no direccionable
-      // individualmente, se simula con un barrido de brillo)
-      float phase = (float)(g_effectStep % 20) / 20.0f;
-      uint8_t localBrightness = (uint8_t)(255 * (1.0f - fabsf(phase - 0.5f) * 2.0f));
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, (localBrightness * 100) / 255),
-                                 ledsScaleChannel(g, (localBrightness * 100) / 255),
-                                 ledsScaleChannel(b, (localBrightness * 100) / 255));
-      return;
-    }
-
-    case EFFECT_FADE_MULTI: {
-      // Secuencia de varios colores predefinidos, con fade entre ellos
-      static const uint8_t palette[6][3] = {
-        {255,0,0},{255,120,0},{255,255,0},{0,255,0},{0,120,255},{170,0,255}
-      };
-      int total = 6 * 40; // 40 pasos de fade por color
-      int pos = g_effectStep % total;
-      int idxA = (pos / 40) % 6;
-      int idxB = (idxA + 1) % 6;
-      float phase = (pos % 40) / 40.0f;
-      r = ledsLerp(palette[idxA][0], palette[idxB][0], phase);
-      g = ledsLerp(palette[idxA][1], palette[idxB][1], phase);
-      b = ledsLerp(palette[idxA][2], palette[idxB][2], phase);
-      break;
-    }
-
-    case EFFECT_SPARKLE: {
-      // Destellos aleatorios de color blanco sobre el color base
-      if (random(0, 4) == 0) {
-        ledsApplyColorToAllStrips(255, 255, 255);
-      } else {
-        ledsApplyColorToAllStrips(r, g, b);
-      }
-      return;
-    }
-
-    case EFFECT_COLOR_WIPE: {
-      // Barrido: transicion de "apagado" a "color" y vuelta, en bucle
-      int pos = g_effectStep % 40;
-      float phase = pos < 20 ? pos / 20.0f : (40 - pos) / 20.0f;
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, 100) * phase,
-                                 ledsScaleChannel(g, 100) * phase,
-                                 ledsScaleChannel(b, 100) * phase);
-      return;
-    }
-
-    case EFFECT_TWINKLE: {
-      // Parpadeos aleatorios suaves tipo "estrellas": brillo aleatorio
-      // suavizado sobre el color base
-      uint8_t localBrightness = 40 + random(0, 60);
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, localBrightness),
-                                 ledsScaleChannel(g, localBrightness),
-                                 ledsScaleChannel(b, localBrightness));
-      return;
-    }
-
-    case EFFECT_PULSE: {
-      // Respiracion mas rapida y marcada (mismo calculo que BREATH pero
-      // con una frecuencia mayor y rango de brillo mas amplio)
-      float phase = (sinf(g_effectStep * 0.25f) + 1.0f) / 2.0f;
-      uint8_t localBrightness = (uint8_t)(phase * 100);
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, localBrightness),
-                                 ledsScaleChannel(g, localBrightness),
-                                 ledsScaleChannel(b, localBrightness));
-      return;
-    }
-
-    case EFFECT_ALTERNATE: {
-      // Alternancia neta entre color 1 y color 2
-      bool first = (g_effectStep % 2) == 0;
-      if (first) { r = g_colorR; g = g_colorG; b = g_colorB; }
-      else       { r = g_colorR2; g = g_colorG2; b = g_colorB2; }
-      break;
-    }
-
-    case EFFECT_FIRE: {
-      // Efecto llama: tonos calidos con parpadeo aleatorio de intensidad
-      uint8_t flicker = random(140, 255);
-      r = flicker;
-      g = (uint8_t)(flicker * 0.35f);
-      b = 0;
-      break;
-    }
-
-    case EFFECT_MUSIC_SIM: {
-      // Simulacion de "beat": variacion pseudoaleatoria de brillo sobre
-      // el color base, como si reaccionara a musica (sin microfono real)
-      uint8_t localBrightness = random(20, 100);
-      ledsApplyColorToAllStrips(ledsScaleChannel(r, localBrightness),
-                                 ledsScaleChannel(g, localBrightness),
-                                 ledsScaleChannel(b, localBrightness));
-      return;
-    }
-
-    default:
-      return;
-  }
-
-  ledsApplyColorToAllStrips(r, g, b);
 }
 
 // ============================================================================
@@ -949,12 +765,9 @@ static void ledsLoadSettings() {
   g_colorR      = g_prefs.getUChar("r", g_colorR);
   g_colorG      = g_prefs.getUChar("g", g_colorG);
   g_colorB      = g_prefs.getUChar("b", g_colorB);
-  g_colorR2     = g_prefs.getUChar("r2", g_colorR2);
-  g_colorG2     = g_prefs.getUChar("g2", g_colorG2);
-  g_colorB2     = g_prefs.getUChar("b2", g_colorB2);
   g_brightness  = g_prefs.getUChar("bright", g_brightness);
   g_power       = g_prefs.getBool("power", g_power);
-  g_effect      = (LedEffect)g_prefs.getUChar("effect", (uint8_t)g_effect);
+  g_effect      = g_prefs.getUChar("effect", g_effect);
   g_speed       = g_prefs.getUChar("speed", g_speed);
   g_prefs.end();
 }
@@ -970,12 +783,9 @@ static void ledsSaveSettings() {
   wr = g_prefs.putUChar("r", g_colorR);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'r'");
   wr = g_prefs.putUChar("g", g_colorG);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'g'");
   wr = g_prefs.putUChar("b", g_colorB);      if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'b'");
-  wr = g_prefs.putUChar("r2", g_colorR2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'r2'");
-  wr = g_prefs.putUChar("g2", g_colorG2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'g2'");
-  wr = g_prefs.putUChar("b2", g_colorB2);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'b2'");
   wr = g_prefs.putUChar("bright", g_brightness); if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'bright'");
   wr = g_prefs.putBool("power", g_power);    if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'power'");
-  wr = g_prefs.putUChar("effect", (uint8_t)g_effect); if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'effect'");
+  wr = g_prefs.putUChar("effect", g_effect); if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'effect'");
   wr = g_prefs.putUChar("speed", g_speed);   if (wr == 0) Serial.println("[LEDS][NVS] FALLO al guardar 'speed'");
   g_prefs.end();
   Serial.printf("[LEDS][NVS] Guardado solicitado: power=%d color=(%d,%d,%d) brillo=%d\n",
@@ -1061,9 +871,29 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 .swatch{width:28px;height:28px;border-radius:4px;border:1px solid var(--line);cursor:pointer;}
 .stripitem{display:flex;justify-content:space-between;align-items:center;padding:6px;border-bottom:1px solid var(--line);font-size:12px;}
 .dim{color:var(--dim);font-size:11px;}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;background:#555;}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;background:#555;}
 .dot.offline{background:var(--red);}
+.dot-conn{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;background:var(--green);}
+.dot-conn.offline{background:var(--red);animation:blinkdot 1s infinite;}
+.dot-color{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;background:#555;border:1px solid var(--line);}
+@keyframes blinkdot{0%,100%{opacity:1;}50%{opacity:0.2;}}
 .daybtn{width:30px;height:26px;font-size:10px;}
+.progpanel{margin-top:6px;}
+.progtoprow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line);}
+.progtoprow .progleft{display:flex;align-items:center;gap:8px;justify-self:start;}
+.progtoprow .progleft label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);}
+.progtoprow .progtitle{font-size:13px;font-weight:bold;justify-self:center;white-space:nowrap;}
+.progtoprow .progtimes{display:flex;gap:8px;justify-self:end;}
+.progstatus.on{color:var(--green);}
+.progstatus.off{color:var(--dim);}
+.progrow2{display:grid;grid-template-columns:40% 20% 1fr;gap:12px;margin-top:8px;align-items:center;}
+.progdays{display:flex;gap:4px;}
+.progdays .daybtn{flex:1;width:auto;}
+.progrow2 input[type=color]{width:100%;height:32px;padding:0;}
+.progbright{display:flex;align-items:center;gap:6px;}
+.progbright input[type=range]{flex:1;}
+.trashbtn{background:none;border:1px solid var(--line);border-radius:4px;width:28px;height:28px;font-size:14px;line-height:1;cursor:pointer;color:var(--red);flex-shrink:0;}
+.clonebtn{width:100%;margin-top:6px;}
 </style>
 </head>
 <body>
@@ -1107,9 +937,14 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 </div>
 <script>
 const el = id => document.getElementById(id);
-const EFFECTS = ["Ninguno","Flash","Fade 2 colores","Respiracion","Arcoiris","Blink",
-  "Persecucion","Fade multicolor","Sparkle","Color wipe","Twinkle","Pulso",
-  "Alternancia","Fuego","Musica"];
+// Efectos NATIVOS que ejecuta la propia tira por hardware (indice 0 =
+// "Ninguno", color estatico). El indice de este array coincide con
+// state.effect (ver g_effect / LEDS_HW_EFFECT_CODES en el backend).
+const EFFECTS = ["Ninguno","Salto RGB","Salto multicolor","Crossfade RGB","Crossfade multicolor",
+  "Crossfade rojo","Crossfade verde","Crossfade azul","Crossfade amarillo","Crossfade cian",
+  "Crossfade magenta","Crossfade blanco","Crossfade rojo+verde","Crossfade rojo+azul","Crossfade verde+azul",
+  "Blink multicolor","Blink rojo","Blink verde","Blink azul","Blink amarillo","Blink cian",
+  "Blink magenta","Blink blanco"];
 const PRESETS = ["#ff0000","#ff7800","#ffff00","#00ff00","#00ffff","#0000ff","#ff00ff","#ffffff"];
 const DAY_LABELS = ["D","L","M","X","J","V","S"];
 let state = {};
@@ -1135,9 +970,14 @@ function refreshState() {
     renderStrips();
     // renderPrograms() hace innerHTML completo: destruye y recrea los
     // <input type="time"/"color"> de cada programa. Si el usuario tiene
-    // el foco dentro de la lista (p.ej. el selector de hora abierto), no
-    // se repinta hasta que salga de ahi.
-    if (!el('programList').contains(active)) renderPrograms();
+    // el foco en uno de esos inputs (p.ej. el selector de hora abierto),
+    // no se repinta hasta que salga de ahi. Los botones (clonar, papelera,
+    // checkbox) no necesitan este bloqueo: si no, un clic en "clonar" o en
+    // la papelera se queda con el foco dentro de programList y el nuevo
+    // programa no aparece hasta el siguiente refresco manual.
+    const activeIsProgInput = el('programList').contains(active) &&
+      (active.tagName === 'INPUT' && (active.type === 'time' || active.type === 'color'));
+    if (!activeIsProgInput) renderPrograms();
   });
 }
 
@@ -1161,44 +1001,86 @@ function renderEffects() {
 function renderStrips() {
   if (!state.strips) return;
   el('stripList').innerHTML = state.strips.map((s,i) => {
-    // El punto refleja el estado real: rojo si la tira no responde por
-    // BLE, apagado (gris) si el grupo esta OFF, o el color/efecto en
-    // curso si esta encendida. Se actualiza solo, junto al resto del
-    // estado (ver setInterval de refreshState).
-    let dotStyle = '';
-    let dotClass = 'dot';
-    if (!s.connected) { dotClass += ' offline'; }
-    else if (state.power) { dotStyle = `background:rgb(${state.r},${state.g},${state.b})`; }
-    return `<div class="stripitem"><span><span class="${dotClass}" style="${dotStyle}"></span>${s.name} <span class="dim">(${s.mac})</span></span>
+    // Dos puntos independientes:
+    // 1) dot-conn: verde fijo si la tira responde por BLE, rojo
+    //    parpadeante si no esta conectada / perdio la conexion.
+    // 2) dot-color: color y brillo real que esta mostrando la tira en
+    //    este momento (opacidad = brillo actual). Gris si esta apagada
+    //    o desconectada. Se actualizan solos junto al resto del estado
+    //    (ver setInterval de refreshState).
+    const connClass = 'dot-conn' + (!s.connected ? ' offline' : '');
+    let colorStyle = '';
+    if (s.connected && state.power) {
+      const op = Math.max(0, Math.min(100, state.brightness)) / 100;
+      colorStyle = `background:rgb(${state.r},${state.g},${state.b});opacity:${op}`;
+    }
+    return `<div class="stripitem"><span><span class="${connClass}"></span><span class="dot-color" style="${colorStyle}"></span>${s.name} <span class="dim">(${s.mac})</span></span>
      <button onclick="post('removeStrip',{index:${i}})">QUITAR</button></div>`;
   }).join('') || '<div class="dim">Sin tiras emparejadas todavia</div>';
 }
 
-const INTENSITY_STEPS = [10,25,50,75,100];
+// Cuantos programas se muestran actualmente. El backend siempre reserva
+// LEDS_MAX_PROGRAMS (5) slots fijos; aqui solo controlamos cuantos son
+// visibles ("Programa maestro" + los clonados). Se recuerda en el propio
+// navegador para que no reaparezcan/desaparezcan solos al recargar.
+const MAX_PROGRAMS = 5;
+let visibleProgramCount = parseInt(localStorage.getItem('visibleProgramCount') || '1');
+if (visibleProgramCount < 1) visibleProgramCount = 1;
+if (visibleProgramCount > MAX_PROGRAMS) visibleProgramCount = MAX_PROGRAMS;
+
 function renderPrograms() {
   if (!state.programs) return;
-  el('programList').innerHTML = state.programs.map((p,i) => `
-    <div class="panel" style="margin-top:6px;">
-      <div class="progrow">
-        <label><input type="checkbox" ${p.enabled?'checked':''} onchange="toggleProgram(${i})"> PROG ${i+1}</label>
-        <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
-        <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
+  const visible = state.programs.slice(0, visibleProgramCount);
+  el('programList').innerHTML = visible.map((p,i) => `
+    <div class="panel progpanel">
+      <div class="progtoprow">
+        <div class="progleft">
+          <label><input type="checkbox" ${p.enabled?'checked':''} onchange="toggleProgram(${i})"> <span class="progstatus ${p.enabled?'on':'off'}">${p.enabled?'ON':'OFF'}</span></label>
+          ${i>0 ? `<button class="trashbtn" title="Eliminar programa" onclick="deleteProgram(${i})">&#128465;</button>` : ''}
+        </div>
+        <span class="progtitle">${i===0?'PROGRAMA MAESTRO':'PROGRAMA '+(i+1)}</span>
+        <div class="progtimes">
+          <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
+          <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
+        </div>
       </div>
-      <div class="row" style="margin-top:6px;">
-        ${DAY_LABELS.map((d,dIdx) =>
-          `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${d}</button>`).join('')}
-      </div>
-      <div class="progrow" style="margin-top:6px;">
+      <div class="progrow2">
+        <div class="progdays">
+          ${DAY_LABELS.map((d,dIdx) =>
+            `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${d}</button>`).join('')}
+        </div>
         <input type="color" value="${rgbToHex(p.colorR,p.colorG,p.colorB)}" onchange="setProgColor(${i},this.value)">
-        <select onchange="setProgIntensity(${i},this.value)">
-          ${INTENSITY_STEPS.map(v => `<option value="${v}" ${p.intensity===v?'selected':''}>${v}%</option>`).join('')}
-        </select>
-        <button onclick="deleteProgram(${i})">BORRAR</button>
+        <div class="progbright">
+          <input type="range" min="0" max="100" value="${p.intensity}" onchange="setProgIntensity(${i},this.value)">
+          <span class="dim">${p.intensity}%</span>
+        </div>
       </div>
-    </div>`).join('');
+    </div>`).join('') +
+    (visibleProgramCount < MAX_PROGRAMS
+      ? `<button class="clonebtn" onclick="cloneProgram()">+ CLONAR PROGRAMA</button>`
+      : '');
 }
 function pad(n){ return String(n).padStart(2,'0'); }
 function toggleProgram(i){ post('setProgram', {index:i, enabled: !state.programs[i].enabled}); }
+// Clona el programa maestro (indice 0) en el siguiente slot libre: copia
+// horario, dias, color e intensidad, y lo activa en pantalla. El slot ya
+// existe en el backend (array fijo de 5), solo pasa a ser visible.
+function cloneProgram() {
+  if (visibleProgramCount >= MAX_PROGRAMS) return;
+  const src = state.programs[0];
+  const newIndex = visibleProgramCount;
+  post('setProgram', {
+    index: newIndex,
+    enabled: src.enabled,
+    startHour: src.startHour, startMinute: src.startMinute,
+    endHour: src.endHour, endMinute: src.endMinute,
+    days: src.days,
+    colorR: src.colorR, colorG: src.colorG, colorB: src.colorB,
+    intensity: src.intensity
+  });
+  visibleProgramCount++;
+  localStorage.setItem('visibleProgramCount', visibleProgramCount);
+}
 function toggleProgDay(i,d){
   const days = state.programs[i].days.slice();
   days[d] = !days[d];
@@ -1218,8 +1100,13 @@ function setProgColor(i, hex) {
 function setProgIntensity(i, value) {
   post('setProgram', {index:i, intensity: parseInt(value)});
 }
+// Solo se puede borrar el ultimo programa clonado (mantiene los indices
+// visibles siempre consecutivos: maestro + 0..N sin huecos).
 function deleteProgram(i) {
+  if (i !== visibleProgramCount - 1) return;
   post('deleteProgram', {index:i});
+  visibleProgramCount--;
+  localStorage.setItem('visibleProgramCount', visibleProgramCount);
 }
 
 el('btnPower').onclick = () => post('setPower', {power: !state.power});
@@ -1256,9 +1143,8 @@ static String ledsBuildStateJson() {
   StaticJsonDocument<1536> doc;
   doc["power"]      = g_power;
   doc["r"] = g_colorR; doc["g"] = g_colorG; doc["b"] = g_colorB;
-  doc["r2"] = g_colorR2; doc["g2"] = g_colorG2; doc["b2"] = g_colorB2;
   doc["brightness"] = g_brightness;
-  doc["effect"]     = (uint8_t)g_effect;
+  doc["effect"]     = g_effect;
   doc["speed"]      = g_speed;
 
   JsonArray strips = doc.createNestedArray("strips");
@@ -1304,10 +1190,13 @@ static void ledsHandleCommand(const String &jsonStr) {
     g_power = doc["power"] | g_power;
     g_scheduleForcedState = g_power; // adopta el estado, evita que el horario lo pise en la siguiente pasada
     g_scheduleOwnsPower = false;     // a partir de ahora el power es manual, no del horario
-    // Color PRIMERO y power despues al encender (ver nota en
+    // Color/efecto PRIMERO y power despues al encender (ver nota en
     // ledsTryConnectStrip): el color reactiva la salida de forma fiable
     // en esta tira, el opcode de power ON solo no siempre lo hace.
-    if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+    if (g_power) {
+      if (g_effect == 0) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+      else ledsApplyEffectToAllStrips(g_effect);
+    }
     ledsApplyPowerToAllStrips(g_power, "cmd-setPower");
     ledsSaveSettings();
 
@@ -1315,23 +1204,38 @@ static void ledsHandleCommand(const String &jsonStr) {
     g_colorR = doc["r"] | g_colorR;
     g_colorG = doc["g"] | g_colorG;
     g_colorB = doc["b"] | g_colorB;
-    g_effect = EFFECT_NONE; // elegir un color manual desactiva el efecto en curso
+    g_effect = 0; // elegir un color manual desactiva el efecto de hardware en curso
     if (g_power) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
     ledsSaveSettings();
 
   } else if (cmd == "setBrightness") {
     g_brightness = constrain((int)(doc["value"] | g_brightness), 0, 100);
-    if (g_power && g_effect == EFFECT_NONE) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+    // El brillo simulado (escalado RGB) solo aplica sin efecto de hardware
+    // en curso: un efecto nativo gestiona su propia intensidad en la tira.
+    if (g_power && g_effect == 0) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
     ledsSaveSettings();
 
   } else if (cmd == "setEffect") {
     uint8_t e = doc["effect"] | 0;
-    if (e < EFFECT_COUNT) g_effect = (LedEffect)e;
-    g_effectStep = 0;
+    if (e <= LEDS_HW_EFFECT_COUNT) g_effect = e;
+    if (g_power) {
+      if (g_effect == 0) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+      else ledsApplyEffectToAllStrips(g_effect);
+    }
     ledsSaveSettings();
 
   } else if (cmd == "setSpeed") {
     g_speed = constrain((int)(doc["value"] | g_speed), 0, 100);
+    // Reenvia la velocidad nativa a las tiras solo si hay un efecto de
+    // hardware activo ahora mismo (sin efecto, la velocidad no aplica).
+    if (g_power && g_effect > 0) {
+      LedsMutexGuard guard(g_bleMutex);
+      for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+        if (g_strips[i].used && g_strips[i].connected) {
+          ledsSendEffectSpeedToStrip(g_strips[i], g_speed);
+        }
+      }
+    }
     ledsSaveSettings();
 
   } else if (cmd == "addStrip") {
@@ -1564,11 +1468,6 @@ static void ledsReconnectTaskFunc(void* pvParameters) {
 }
 
 void ledsLoop() {
-  unsigned long now = millis();
-
-  // --- Motor de efectos (no bloqueante, respeta la velocidad configurada) ---
-  ledsStepEffect();
-
   // --- Vacia la cola de comandos BLE pendientes por tira (no bloqueante) ---
   ledsFlushPendingTx();
 
