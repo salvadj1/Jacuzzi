@@ -35,33 +35,85 @@ static uint8_t       g_lastFlags        = 0xFF; // invalido a proposito: fuerza 
 // watchdog/panic dentro de datalogLoop (ver diagnostico /diag).
 static uint8_t g_samplesSinceFlush = 0;
 
+// Buffer temporal solo para la relectura de verificacion tras escribir un
+// trozo. Estatico (no en stack) por el mismo motivo que g_logTmp: es chico
+// (900 bytes) pero evitamos tocar el stack de la tarea principal.
+static LogEntry g_verifyBuf[LOG_CHUNK_ENTRIES];
+
+// Escribe el trozo "chunk" en NVS a partir de g_log y relee inmediatamente
+// para comprobar que quedo bien grabado (proteccion frente a un corte de
+// alimentacion/reset a mitad de la escritura en flash). Asume que
+// prefsLog.begin() ya esta abierto por el llamante.
+//
+// Reutilizable: la usan tanto el volcado periodico (persistChunk) como el
+// borrado/compactado completo (datalogDeleteRange), y serviria igual para
+// cualquier otro buffer circular con este mismo patron de chunks (mismo
+// patron que diaglog.cpp).
+//
+// Devuelve true si el trozo quedo escrito y verificado correctamente.
+static bool writeChunkVerified(int chunk) {
+  size_t chunkBytes = LOG_CHUNK_ENTRIES * sizeof(LogEntry);
+  LogEntry* chunkData = &g_log[chunk * LOG_CHUNK_ENTRIES];
+
+  // Clave fija en stack (sin String): se llama en cada volcado a NVS, y
+  // usar String aqui iba fragmentando el heap con el tiempo hasta
+  // provocar un panic.
+  char key[4];
+  snprintf(key, sizeof(key), "c%d", chunk);
+
+  prefsLog.putBytes(key, chunkData, chunkBytes);
+
+  // Relectura de verificacion: si no coincide (o directamente no se puede
+  // leer de vuelta), la escritura no es de fiar.
+  size_t got = prefsLog.getBytes(key, g_verifyBuf, chunkBytes);
+  bool ok = (got == chunkBytes) && (memcmp(g_verifyBuf, chunkData, chunkBytes) == 0);
+
+  if (!ok) {
+    Serial.printf("[DATALOG] AVISO: fallo al verificar el trozo %d (%s) en NVS\n", chunk, key);
+  }
+  return ok;
+}
+
 // Vuelca a NVS solo el trozo que contiene "physicalIndex", mas la cabecera
 // (head/count). Minimiza el desgaste de flash frente a regrabar todo el
 // buffer en cada muestra.
 //
-// Reutilizable: puede llamarse desde cualquier modulo que necesite forzar
-// el respaldo en NVS de un buffer circular con este mismo patron de chunks.
+// BLINDAJE ante corte a mitad de escritura (reset/brownout, p.ej. al
+// conmutar un rele justo cuando toca volcar a flash): el trozo de datos
+// se escribe y se verifica (ver writeChunkVerified). Solo si la
+// verificacion pasa se actualizan "head"/"count" en NVS. Si no, esos
+// punteros se quedan como estaban (el ultimo estado bueno ya guardado) y
+// NO se toca el trozo con datos corruptos: datalogInit() nunca los vera
+// como validos porque count no llego a incluirlos. En el peor caso se
+// pierden, en RAM, solo las muestras pendientes de ESTE volcado (se
+// reintenta en el siguiente), nunca un dia entero ya persistido.
 //
 // Se "alimenta" el watchdog antes y despues de la escritura en flash:
 // aunque ahora se llama con mucha menos frecuencia (ver
 // DATALOG_PERSIST_EVERY_N), esto actua como red de seguridad ante una
 // escritura NVS puntual mas lenta de lo normal (flash desgastada, etc.),
 // evitando que dispare un reset por watchdog en mitad de la operacion.
-static void persistChunk(uint16_t physicalIndex) {
+//
+// Devuelve true si el trozo quedo escrito y verificado correctamente.
+static bool persistChunk(uint16_t physicalIndex) {
   int chunk = physicalIndex / LOG_CHUNK_ENTRIES;
+
   esp_task_wdt_reset();
   prefsLog.begin("datalog", false);
-  prefsLog.putUShort("head", g_head);
-  prefsLog.putUShort("count", g_count);
-  // Clave fija en stack (sin String): esto se llama en cada volcado a NVS,
-  // y usar String aqui iba fragmentando el heap con el tiempo hasta
-  // provocar un panic.
-  char key[4];
-  snprintf(key, sizeof(key), "c%d", chunk);
-  prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+  bool ok = writeChunkVerified(chunk);
+  if (ok) {
+    prefsLog.putUShort("head", g_head);
+    prefsLog.putUShort("count", g_count);
+  }
   prefsLog.end();
   esp_task_wdt_reset();
+
+  if (!ok) {
+    Serial.println("[DATALOG] head/count NO actualizados; se reintentara en el siguiente volcado");
+  }
+  return ok;
 }
+
 
 void datalogInit() {
   prefsLog.begin("datalog", true);
@@ -72,7 +124,16 @@ void datalogInit() {
     size_t expected = LOG_CHUNK_ENTRIES * sizeof(LogEntry);
     size_t got = prefsLog.getBytes(key.c_str(), &g_log[chunk * LOG_CHUNK_ENTRIES], expected);
     if (got != expected) {
-      // Trozo nunca escrito (primer arranque): lo dejamos a cero.
+      // Si "count" decia que en este trozo debia haber datos reales, esto
+      // no es un primer arranque: es un trozo corrupto/ilegible y se
+      // estan perdiendo muestras ya dadas por guardadas. De momento se
+      // sigue recuperando igual (a cero), pero al menos queda avisado.
+      if ((uint32_t)chunk * LOG_CHUNK_ENTRIES < g_count) {
+        Serial.printf("[DATALOG] AVISO: trozo %d corrupto o ilegible al arrancar "
+                      "(se esperaban datos, count=%u); esas muestras se pierden\n",
+                      chunk, g_count);
+      }
+      // Trozo nunca escrito (primer arranque) o corrupto: lo dejamos a cero.
       memset(&g_log[chunk * LOG_CHUNK_ENTRIES], 0, expected);
     }
   }
@@ -121,8 +182,11 @@ static void addEntry(uint8_t flags) {
   g_samplesSinceFlush++;
   bool shouldFlush = (g_samplesSinceFlush >= DATALOG_PERSIST_EVERY_N);
   if (shouldFlush) {
-    persistChunk(writtenAt);
-    g_samplesSinceFlush = 0;
+    // Si la verificacion falla NO se resetea el contador: se reintentara
+    // el volcado en la siguiente muestra en vez de darlo por hecho.
+    if (persistChunk(writtenAt)) {
+      g_samplesSinceFlush = 0;
+    }
   }
 
   g_lastFlags = flags;
@@ -261,19 +325,38 @@ void datalogDeleteRange(uint32_t fromTs, uint32_t toTs) {
   memcpy(g_log, g_logTmp, kept * sizeof(LogEntry));
   // Buffer recien compactado: nunca ha "dado la vuelta", asi que el
   // criterio es el mismo que en datalogGet() para ese caso (head=count).
-  g_count = kept;
-  g_head  = kept % LOG_CAPACITY;
-  g_samplesSinceFlush = 0; // esta operacion vuelca todo el buffer a continuacion
+  uint16_t newCount = (uint16_t)kept;
+  uint16_t newHead  = (uint16_t)(kept % LOG_CAPACITY);
 
+  // BLINDAJE (mismo criterio que persistChunk): se escriben y verifican
+  // TODOS los trozos antes de tocar head/count. Si alguno falla, head/
+  // count en NVS se quedan como estaban (el ultimo estado bueno) y el
+  // borrado NO se da por persistido -aunque en RAM ya haya quedado
+  // aplicado, asi que el jacuzzi sigue funcionando bien con los datos ya
+  // compactados-; queda avisado por Serial y basta con repetir el
+  // borrado para reintentar guardarlo en NVS.
+  esp_task_wdt_reset();
   prefsLog.begin("datalog", false);
-  prefsLog.putUShort("head", g_head);
-  prefsLog.putUShort("count", g_count);
+  bool allOk = true;
   for (int chunk = 0; chunk < LOG_NUM_CHUNKS; chunk++) {
-    char key[4];
-    snprintf(key, sizeof(key), "c%d", chunk);
-    prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+    if (!writeChunkVerified(chunk)) allOk = false;
+    esp_task_wdt_reset(); // el borrado reescribe TODOS los trozos: vigilar el watchdog en cada uno
+  }
+  if (allOk) {
+    prefsLog.putUShort("head", newHead);
+    prefsLog.putUShort("count", newCount);
   }
   prefsLog.end();
+  esp_task_wdt_reset();
 
-  Serial.printf("[DATALOG] Borradas muestras del rango [%u,%u); quedan %d\n", fromTs, toTs, g_count);
+  g_head  = newHead;
+  g_count = newCount;
+  g_samplesSinceFlush = 0; // esta operacion ya ha volcado (o intentado volcar) todo el buffer
+
+  if (allOk) {
+    Serial.printf("[DATALOG] Borradas muestras del rango [%u,%u); quedan %d\n", fromTs, toTs, g_count);
+  } else {
+    Serial.printf("[DATALOG] AVISO: borrado de rango [%u,%u) aplicado en RAM pero NO verificado "
+                  "por completo en NVS; repite el borrado para reintentar guardarlo\n", fromTs, toTs);
+  }
 }
