@@ -853,7 +853,8 @@ static const char LEDS_HTML[] PROGMEM = R"HTMLPAGE(
 }
 *{box-sizing:border-box;}
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:14px;}
-h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;}
+h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;display:flex;justify-content:space-between;align-items:center;}
+a.back{color:var(--dim);text-decoration:none;font-size:11px;letter-spacing:1px;border:1px solid var(--line);padding:5px 10px;border-radius:6px;}
 h2{font-size:11px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;margin:14px 0 6px 4px;}
 .wrap{max-width:560px;margin:0 auto;}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px;margin-top:8px;}
@@ -861,7 +862,6 @@ h2{font-size:11px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase
 button{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-family:var(--mono);font-size:11px;cursor:pointer;}
 button.active{border-color:var(--amber);color:var(--amber);}
 button.on{border-color:var(--green);color:var(--green);}
-button.back{margin-bottom:8px;}
 input[type=range]{width:100%;}
 input[type=color]{width:44px;height:30px;border:1px solid var(--line);border-radius:4px;background:none;padding:0;}
 input[type=time]{background:#16211c;color:var(--text);border:1px solid var(--line);border-radius:4px;font-family:var(--mono);padding:3px 6px;}
@@ -879,22 +879,24 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 @keyframes blinkdot{0%,100%{opacity:1;}50%{opacity:0.2;}}
 .daybtn{width:30px;height:26px;font-size:10px;}
 .progpanel{margin-top:6px;}
-.progtoprow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line);}
-.progtoprow .progleft{display:flex;align-items:center;gap:8px;justify-self:start;}
+.progtoprow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line);}
+.progtoprow .progleft{display:flex;align-items:center;gap:8px;min-width:0;}
 .progtoprow .progleft label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);}
-.progtoprow .progtitle{font-size:13px;font-weight:bold;justify-self:center;white-space:nowrap;}
-.progtoprow .progtimes{display:flex;gap:8px;justify-self:end;}
+.progtoprow .progtitle{font-size:13px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .progstatus.on{color:var(--green);}
 .progstatus.off{color:var(--dim);}
-.progrow2{display:grid;grid-template-columns:40% 20% 1fr;gap:12px;margin-top:8px;align-items:center;}
-.progdays{display:flex;gap:4px;}
-.progdays .daybtn{flex:1;width:auto;}
-.progrow2 input[type=color]{width:100%;height:32px;padding:0;}
-.progbright{display:flex;align-items:center;gap:6px;}
-.progbright input[type=range]{flex:1;}
+.progrow2{display:grid;grid-template-columns:50% 50%;gap:8px;margin-top:8px;align-items:center;min-width:0;}
+.progdays{display:flex;gap:3px;min-width:0;}
+.progdays .daybtn{flex:1;width:auto;min-width:0;padding:0 2px;}
+.progtimes{display:flex;gap:6px;min-width:0;}
+.progtimes input[type=time]{flex:1;min-width:0;padding:3px 4px;}
+.progrow3{display:grid;grid-template-columns:25% 1fr;gap:8px;margin-top:8px;align-items:center;min-width:0;}
+.progrow3 input[type=color]{width:100%;height:32px;padding:0;}
+.progbright{display:flex;align-items:center;gap:6px;min-width:0;}
+.progbright input[type=range]{flex:1;min-width:0;}
 .trashbtn{background:none;border:1px solid var(--line);border-radius:4px;width:28px;height:28px;font-size:14px;line-height:1;cursor:pointer;color:var(--red);flex-shrink:0;}
 .clonebtn{width:100%;margin-top:6px;}
-.effgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;}
+.effgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px;}
 .effcard{border:1px solid var(--line);border-radius:6px;padding:8px;}
 .effcatlabel{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
 .effpreview{width:100%;height:44px;border-radius:4px;margin-bottom:6px;}
@@ -908,8 +910,16 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
 </head>
 <body>
 <div class="wrap">
-<button class="back" onclick="location.href='/'">&larr; VOLVER</button>
-<h1>&#9679; ESP32 &middot; CONTROL TIRAS LED</h1>
+<h1>&#9679; INTERFAZ LEDS <a class="back" href="/">&larr; VOLVER</a></h1>
+
+<div class="panel">
+  <h2>Tiras emparejadas</h2>
+  <div id="stripList"></div>
+  <div class="row">
+    <button id="btnScan">BUSCAR TIRAS</button>
+  </div>
+  <div id="scanResults"></div>
+</div>
 
 <div class="panel">
   <h2>Encendido</h2>
@@ -934,15 +944,6 @@ select{background:#16211c;color:var(--text);border:1px solid var(--line);border-
   <div class="effgrid" id="effects"></div>
   <div class="dim" style="margin-top:10px;">Velocidad</div>
   <input type="range" id="speed" min="0" max="100" value="50">
-</div>
-
-<div class="panel">
-  <h2>Tiras emparejadas</h2>
-  <div id="stripList"></div>
-  <div class="row">
-    <button id="btnScan">BUSCAR TIRAS</button>
-  </div>
-  <div id="scanResults"></div>
 </div>
 
 <div class="panel">
@@ -1223,16 +1224,18 @@ function renderPrograms() {
           ${i>0 ? `<button class="trashbtn" title="Eliminar programa" onclick="deleteProgram(${i})">&#128465;</button>` : ''}
         </div>
         <span class="progtitle" ${i===0?'style="color:#ffff00;"':''}>${i===0?'PROGRAMA MAESTRO':'PROGRAMA '+(i+1)}</span>
-        <div class="progtimes">
-          <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
-          <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
-        </div>
       </div>
       <div class="progrow2">
         <div class="progdays">
           ${DAY_LABELS.map((d,dIdx) =>
             `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${d}</button>`).join('')}
         </div>
+        <div class="progtimes">
+          <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
+          <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
+        </div>
+      </div>
+      <div class="progrow3">
         <input type="color" value="${rgbToHex(p.colorR,p.colorG,p.colorB)}" onchange="setProgColor(${i},this.value)">
         <div class="progbright">
           <input type="range" min="0" max="100" value="${p.intensity}" onchange="setProgIntensity(${i},this.value)">
