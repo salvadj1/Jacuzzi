@@ -25,10 +25,13 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 *{box-sizing:border-box;}
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:14px;}
 h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;}
-.wrap{max-width:560px;margin:0 auto;}
+.wrap{max-width:560px;margin:0 auto;height:calc(100vh - 28px);display:flex;flex-direction:column;overflow:hidden;}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px;margin-top:5px;}
+.panel-main{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;}
+.panel-scheme{margin-top:auto;flex:0 0 auto;padding-top:8px;}
 svg{width:100%;height:auto;display:block;}
 .minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:5px 5px;}
+.minibox + .minibox{margin-top:5px;}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;}
 .tcard{background:transparent;border:none;border-bottom:2px solid var(--amber);padding:10px 4px;text-align:left;cursor:default;}
 .tcard.clickable{cursor:pointer;}
@@ -184,12 +187,8 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     </div>
   </div>
 </div>
-<div class="panel">
-<svg viewBox="0 0 560 885" xmlns="http://www.w3.org/2000/svg">
-
-  <!-- ===== RECUADRO DE ESTADO (fuera del grupo desplazado, arriba del todo) ===== -->
-  <foreignObject x="10" y="0" width="540" height="560">
-    <div xmlns="http://www.w3.org/1999/xhtml" class="minibox">
+<div class="panel panel-main">
+    <div class="minibox">
 
       <div class="discharge-bar" id="dischargeBar">
         <b>DESCARGA SOLAR EN CURSO · <span id="dischargeTime">—</span></b>
@@ -230,7 +229,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
     </div>
 
-    <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
+    <div class="minibox">
       <div class="pillrow">
         <span class="pill" id="pillBomba"><span class="pilllbl">BOMBA</span><b id="statPump">—</b></span>
         <span class="pill" id="pillModo"><span class="pilllbl">MODO</span><b id="modeText">—</b></span>
@@ -247,7 +246,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
       </div>
     </div>
 
-    <div xmlns="http://www.w3.org/1999/xhtml" class="minibox" style="margin-top:8px;">
+    <div class="minibox">
       <div class="clockprogrow">
         <div class="clockbox clickable" id="clockRow">
           <div class="cb-lbl">HORA ACTUAL
@@ -285,9 +284,11 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         <button class="guardar" id="progGuardar">GUARDAR</button>
       </div>
     </div>
-  </foreignObject>
 
-<g transform="translate(-20,165) scale(1.08)">
+    <div class="panel-scheme">
+<svg viewBox="5 375 545 270" xmlns="http://www.w3.org/2000/svg">
+
+<g>
 
   <!-- ===== SERPENTIN SOLAR: S apretadas (media S extra al final), bajado 100px; separado 10px extra del filtro alargando las tuberias que suben/bajan ===== -->
   <path class="pipe" d="M 320,570 L 320,456 L 320,416 A 10,10 0 0 1 341.33,416 L 341.33,456 A 10,10 0 0 0 362.67,456 L 362.67,416 A 10,10 0 0 1 384,416 L 384,456 A 10,10 0 0 0 405.33,456 L 405.33,416 A 10,10 0 0 1 426.67,416 L 426.67,456 A 10,10 0 0 0 448,456 L 448,416 A 10,10 0 0 1 469.33,416 L 469.33,456 A 10,10 0 0 0 490.67,456 L 490.67,416 A 10,10 0 0 1 512,416 L 512,456 L 512,570"/>
@@ -369,10 +370,10 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
 </g>
 </svg>
+    </div>
 </div>
 
 </div>
-
 <script>
 // -----------------------------------------------------------------------
 // Cliente web real: NO hay simulacion. Todos los datos vienen del ESP32

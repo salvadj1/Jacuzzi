@@ -44,6 +44,7 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .tarjeta .sub{font-size:9px;color:var(--dim);margin-top:2px;}
 .chart-wrap{background:#0d1512;border-radius:8px;padding:6px;}
 canvas#heapChart{display:block;width:100%;height:120px;}
+canvas#resetChart{display:block;width:100%;height:90px;}
 .tabs{display:flex;gap:6px;margin-bottom:8px;}
 .tab-btn{flex:1;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:7px 6px;color:var(--dim);font-family:var(--mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;}
 .tab-btn.activa{color:var(--amber);border-color:var(--amber);}
