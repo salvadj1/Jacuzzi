@@ -22,7 +22,7 @@ const char DIAG_HTML[] PROGMEM = R"HTMLPAGE(
 <style>
 :root{
   --bg:#0b1210; --panel:#101a17; --line:#22332c; --text:#d8e2dd; --dim:#9db3a6;
-  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --water:#2fa6c9;
+  --amber:#ffb020; --green:#2eff7a; --red:#ff3b2e; --water:#00c8f0;
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}

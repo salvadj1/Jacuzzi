@@ -18,8 +18,8 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 <style>
 :root{
   --bg:#0b1210; --panel:#101a17; --line:#22332c; --steel:#3a4a44;
-  --pipe:#2b3b36; --water:#2fa6c9; --water-hot:#e0672e;
-  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --text:#d8e2dd; --dim:#9db3a6;
+  --pipe:#2b3b36; --water:#00c8f0; --water-hot:#e0672e;
+  --amber:#ffb020; --green:#2eff7a; --red:#ff3b2e; --text:#d8e2dd; --dim:#9db3a6;
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}
@@ -36,7 +36,7 @@ svg{width:100%;height:auto;display:block;}
 .tcard-val{display:block;color:var(--amber);font-size:30px;font-weight:900;margin-top:2px;}
 #rowT1 .tcard-lbl{color:#ff6b5e;} #rowT1 .tcard-val{color:#ff6b5e;}
 #rowT2 .tcard-lbl{color:#4fd6ff;} #rowT2 .tcard-val{color:#4fd6ff;}
-#rowTempObj .tcard-lbl{color:#e8a33d;} #rowTempObj .tcard-val{color:#e8a33d;}
+#rowTempObj .tcard-lbl{color:#ffb020;} #rowTempObj .tcard-val{color:#ffb020;}
 #rowTempDis .tcard-lbl{color:#c78bff;} #rowTempDis .tcard-val{color:#c78bff;}
 .minibox .row{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;padding:10px 0;border-bottom:1px solid #223229;}
 .minibox .row:last-child{border-bottom:none;}
@@ -123,7 +123,7 @@ svg{width:100%;height:auto;display:block;}
 .reset-box h3{color:var(--amber);margin-top:0;}
 .reset-box p{font-size:13px;line-height:1.5;}
 .reset-botones{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}
-.reset-box button.confirmar{background:#4fd67a;color:#0b1210;border:none;}
+.reset-box button.confirmar{background:#2eff7a;color:#0b1210;border:none;}
 .reset-ssid{font-size:18px;color:var(--green);font-weight:bold;}
 #resetLinkManual{display:inline-block;margin-top:10px;color:var(--amber);}
 .led{transition:fill .4s, opacity .4s;}
@@ -131,7 +131,7 @@ svg{width:100%;height:auto;display:block;}
 .pump-blade{transform-box:fill-box;transform-origin:center;}
 .pump-blade.on{animation:spin 0.6s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
-.sun-ray{stroke:#e8a33d;stroke-width:2;opacity:0;animation:ray 2.4s ease-in-out infinite;}
+.sun-ray{stroke:#ffb020;stroke-width:2;opacity:0;animation:ray 2.4s ease-in-out infinite;}
 @keyframes ray{0%{opacity:0;}30%{opacity:.55;}100%{opacity:0;}}
 .statusbar{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;padding:10px 14px;background:#0d1512;border:1px solid var(--line);border-radius:6px;font-size:12px;}
 .statusbar .item{display:flex;align-items:center;gap:6px;color:var(--dim);}

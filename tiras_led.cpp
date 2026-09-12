@@ -848,7 +848,7 @@ static const char LEDS_HTML[] PROGMEM = R"HTMLPAGE(
 <style>
 :root{
   --bg:#0b1210; --panel:#101a17; --line:#22332c; --steel:#3a4a44;
-  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --text:#d8e2dd; --dim:#9db3a6;
+  --amber:#ffb020; --green:#2eff7a; --red:#ff3b2e; --text:#d8e2dd; --dim:#9db3a6;
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}

@@ -21,8 +21,8 @@ const char DATA_HTML[] PROGMEM = R"HTMLPAGE(
 <style>
 :root{
   --bg:#0b1210; --panel:#101a17; --line:#22332c; --steel:#3a4a44;
-  --water:#2fa6c9; --water-hot:#e0672e;
-  --amber:#e8a33d; --green:#4fd67a; --red:#e2513f; --text:#d8e2dd; --dim:#9db3a6;
+  --water:#00c8f0; --water-hot:#e0672e;
+  --amber:#ffb020; --green:#2eff7a; --red:#ff3b2e; --text:#d8e2dd; --dim:#9db3a6;
   --mono:'Courier New',monospace;
 }
 *{box-sizing:border-box;}
@@ -127,7 +127,7 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 const DIAS = ['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 // Estado derivado de los flags registrados: 0=parado (bomba off),
 // 1=filtrando (bomba on, valvulas en filtro), 2=solar (bomba on, valvulas a solar)
-const STATE_COLOR = {0:'#3a4a44',1:'#2fa6c9',2:'#e0672e'};
+const STATE_COLOR = {0:'#3a4a44',1:'#00c8f0',2:'#e0672e'};
 const STATE_LABEL = {0:'PARADO',1:'FILTRANDO',2:'SOLAR (CALENTANDO)'};
 const STATE_CLASS = {0:'parado',1:'filtro',2:'solar'};
 function stateOf(flags){ if(!(flags & 1)) return 0; return (flags & 4) ? 2 : 1; }
@@ -320,7 +320,7 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
     samples.forEach((s,i)=>{ const x=xOf(s[0]),y=yOf(s[idx]); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
     ctx.stroke();
   }
-  line(1,'#2fa6c9'); line(2,'#e0672e');
+  line(1,'#00c8f0'); line(2,'#e0672e');
 
   const evPts = [];
   let prevState=samples[0][3], prevTs=samples[0][0];
@@ -361,7 +361,7 @@ function buildUI(){
     // ni siempre lleno); el numero de abajo es el dato real.
     const descargasPct = Math.min(res.descargas/6, 1);
     const bonusPct = Math.min(Math.abs(res.bonus)/8, 1);
-    const bonusColor = res.bonus >= 0 ? '#4fd67a' : '#e2513f';
+    const bonusColor = res.bonus >= 0 ? '#2eff7a' : '#ff3b2e';
     const bonusClass = res.bonus > 0 ? 'pos' : (res.bonus < 0 ? 'neg' : '');
     const bonusTxt = (res.bonus >= 0 ? '+' : '') + res.bonus.toFixed(1) + '°';
     const page = document.createElement('div');
@@ -371,9 +371,9 @@ function buildUI(){
       '<span class="right">'+(isToday?'<span class="today-badge">HOY</span>':'')+'<button class="btn-del-dia" data-daykey="'+day.key+'">BORRAR DIA</button></span></div>'+
       '<div class="donuts">'+
         '<div class="donut-box">'+donutSVG(t[2]/totalDay,'#e0672e',54)+'<div class="val">SOLAR<br><b>'+fmtDur(t[2])+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#2fa6c9',54)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#00c8f0',54)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(t[0]/totalDay,'#9db3a6',54)+'<div class="val">PARADO<br><b>'+fmtDur(t[0])+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(descargasPct,'#e8a33d',54)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(descargasPct,'#ffb020',54)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(bonusPct,bonusColor,54)+'<div class="val">BONUS TÉRMICO<br><b class="'+bonusClass+'">'+bonusTxt+'</b></div></div>'+
       '</div>'+
       '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
