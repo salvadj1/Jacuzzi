@@ -46,6 +46,7 @@ static bool ntpConfigured = false;
 static unsigned long ntpConfiguredAtMillis = 0; // cuando se llamo a configTzTime(), para medir el timeout
 static bool otaStarted = false;
 static unsigned long lastBroadcast = 0;
+static unsigned long bootMillis = 0; // millis() al final de setup(), para el timeout NTP absoluto
 
 void setup() {
   Serial.begin(115200);
@@ -109,6 +110,8 @@ void setup() {
   Serial.println("[MAIN] Inicializando WiFi...");
   setupWifi(); // conecta a la mejor red conocida, y abre el AP de config
 
+  bootMillis = millis();
+
   Serial.println("[MAIN] Setup completado, entrando en loop principal.");
 }
 
@@ -117,6 +120,18 @@ void loop() {
 
   diaglogSetStage(DIAG_STAGE_LOOP_WIFI);
   loopWifi();
+
+  // Timeout ABSOLUTO desde el arranque, con o sin WiFi: si tras
+  // NTP_TIMEOUT_MS_ABS seguimos sin hora valida (por ejemplo porque el
+  // ESP32 se ha quedado en modo AP y nunca entra en el bloque de abajo,
+  // que depende de wifiIsConnected()), reiniciamos igualmente. Este
+  // chequeo es el que cubre el hueco del timeout de mas abajo.
+  if (time(nullptr) < 1600000000 && millis() - bootMillis > NTP_TIMEOUT_MS_ABS) {
+    Serial.println("[MAIN] Sin hora NTP tras el timeout absoluto desde el arranque. Reiniciando...");
+    diaglogSetStage(DIAG_STAGE_NTP_TIMEOUT_NOWIFI);
+    delay(200); // margen para que el mensaje salga por el Monitor Serie
+    ESP.restart();
+  }
 
   // OTA y la sincronizacion horaria (NTP) solo tienen sentido una vez
   // estamos conectados como cliente a una red real.

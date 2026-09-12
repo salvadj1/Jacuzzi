@@ -172,6 +172,7 @@ const char* diaglogStageText(uint8_t stage) {
     case DIAG_STAGE_DIAGLOG:      return "diaglogLoop";
     case DIAG_STAGE_BROADCAST:    return "broadcastState";
     case DIAG_STAGE_NTP_TIMEOUT:  return "Reinicio por falta de hora NTP";
+    case DIAG_STAGE_NTP_TIMEOUT_NOWIFI: return "Reinicio por falta de hora NTP (sin WiFi estable)";
     default:                      return "Desconocido";
   }
 }

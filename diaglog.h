@@ -66,6 +66,9 @@ enum DiagStage : uint8_t {
   DIAG_STAGE_BROADCAST,
   DIAG_STAGE_NTP_TIMEOUT, // reinicio deliberado: WiFi conectado pero la hora
                           // NTP no se sincronizo tras NTP_TIMEOUT_MS (ver .ino)
+  DIAG_STAGE_NTP_TIMEOUT_NOWIFI, // reinicio deliberado: sin hora valida tras
+                          // NTP_TIMEOUT_MS_ABS desde el arranque, con o sin
+                          // WiFi (cubre el caso de quedarse en modo AP)
 };
 
 // Marca la zona actual del loop() (ver DiagStage). Muy barato (escribe un

@@ -107,6 +107,13 @@
 // valida (afecta al programa horario y al datalog, ver esp32_jacuzzi.ino).
 #define NTP_TIMEOUT_MS (10UL * 60UL * 1000UL) // 10 min de margen tras conectar WiFi
 
+// Timeout ABSOLUTO desde el arranque, independiente de si hay WiFi o no.
+// Cubre el caso en que el ESP32 se queda en modo AP (sin conectar nunca
+// como cliente) y por tanto el timeout de arriba, que depende de WiFi
+// conectado, nunca llega a comprobarse: sin esto podria quedarse horas
+// sin hora valida sin que nada lo reinicie.
+#define NTP_TIMEOUT_MS_ABS (15UL * 60UL * 1000UL) // 15 min desde el boot
+
 // ---------------- Registro de diagnostico (para investigar cuelgues) ----------------
 // Guarda periodicamente heap libre, clientes WebSocket, estado WiFi, etc.
 // para poder revisar que paso si el sistema se queda "colgado" otra vez.
