@@ -194,17 +194,29 @@ static bool ledsBleAllowedNow() {
 // Pequena ayuda RAII para no olvidar nunca soltar un mutex, incluso si hay
 // un "return" en medio de la seccion critica. Reutilizable en cualquier
 // otro modulo que necesite el mismo patron con un SemaphoreHandle_t.
+// timeoutTicks por defecto = portMAX_DELAY (espera indefinida, comportamiento
+// previo) para no afectar a los usos internos que ya son seguros. Los
+// llamantes que pueden ejecutarse en la tarea AsyncTCP (comandos web) deben
+// pasar un timeout finito y comprobar locked() para no colgar el servidor
+// web si el mutex esta retenido por una operacion BLE atascada.
 class LedsMutexGuard {
 public:
-  explicit LedsMutexGuard(SemaphoreHandle_t m) : m_mutex(m) {
-    if (m_mutex) xSemaphoreTake(m_mutex, portMAX_DELAY);
+  explicit LedsMutexGuard(SemaphoreHandle_t m, TickType_t timeoutTicks = portMAX_DELAY) : m_mutex(m) {
+    m_locked = m_mutex ? (xSemaphoreTake(m_mutex, timeoutTicks) == pdTRUE) : true;
   }
   ~LedsMutexGuard() {
-    if (m_mutex) xSemaphoreGive(m_mutex);
+    if (m_mutex && m_locked) xSemaphoreGive(m_mutex);
   }
+  bool locked() const { return m_locked; }
 private:
   SemaphoreHandle_t m_mutex;
+  bool m_locked;
 };
+
+// Timeout para los guards de g_bleMutex tomados desde el camino de comandos
+// web (tarea AsyncTCP): si no se consigue en este plazo, se descarta el
+// comando en vez de bloquear el servidor web indefinidamente.
+#define LEDS_BLE_MUTEX_TIMEOUT_MS 1000
 
 // --- Estado de aplicacion del programa horario (para no repetir logs/acciones) ---
 static bool g_scheduleForcedState = false; // ultimo estado ON/OFF calculado por el horario (para detectar cambios)
@@ -369,7 +381,11 @@ static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
   uint8_t sr = ledsScaleChannel(r, g_brightness);
   uint8_t sg = ledsScaleChannel(g, g_brightness);
   uint8_t sb = ledsScaleChannel(b, g_brightness);
-  LedsMutexGuard guard(g_bleMutex);
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    Serial.println("[LEDS] Mutex BLE ocupado, color descartado");
+    return;
+  }
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
       ledsSendColorToStrip(g_strips[i], sr, sg, sb);
@@ -379,7 +395,11 @@ static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
 
 // Aplica encendido/apagado a todas las tiras conectadas del grupo.
 static void ledsApplyPowerToAllStrips(bool on, const char *source) {
-  LedsMutexGuard guard(g_bleMutex);
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    Serial.println("[LEDS] Mutex BLE ocupado, power descartado");
+    return;
+  }
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
       ledsSendPowerToStrip(g_strips[i], on, source);
@@ -417,7 +437,11 @@ static void ledsSendEffectSpeedToStrip(LedStrip &s, uint8_t speedPct) {
 static void ledsApplyEffectToAllStrips(uint8_t effectIndex) {
   if (effectIndex == 0 || effectIndex > LEDS_HW_EFFECT_COUNT) return;
   uint8_t code = LEDS_HW_EFFECT_CODES[effectIndex - 1];
-  LedsMutexGuard guard(g_bleMutex);
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    Serial.println("[LEDS] Mutex BLE ocupado, efecto descartado");
+    return;
+  }
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     if (g_strips[i].used && g_strips[i].connected) {
       ledsSendEffectToStrip(g_strips[i], code);
