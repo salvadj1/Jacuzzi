@@ -29,37 +29,67 @@ static uint16_t g_count = 0; // muestras validas actualmente guardadas
 static unsigned long g_lastSampleMillis = 0;
 static uint8_t       g_lastFlags        = 0xFF; // invalido a proposito: fuerza el primer registro
 
+// Retardo entre "toca volcar a NVS" y el volcado real. Separa a proposito
+// la escritura en flash del instante exacto de un cambio de rele (bomba/
+// valvulas): el pico de corriente al conmutar dura unos pocos ms/decenas
+// de ms, y este margen evita que ambas cosas coincidan justo cuando mas
+// vulnerable es el sistema a un brownout/reset a mitad de escritura.
+#define DATALOG_FLUSH_DELAY_MS 500
+static bool          g_flushPending = false;
+static unsigned long g_flushDueAt   = 0;
+
 // Contador de muestras añadidas en RAM desde el ultimo volcado a NVS.
 // Ver DATALOG_PERSIST_EVERY_N en datalog.h: reduce la frecuencia de
 // escritura en flash, que era la causa confirmada de resets por
 // watchdog/panic dentro de datalogLoop (ver diagnostico /diag).
 static uint8_t g_samplesSinceFlush = 0;
 
-// Vuelca a NVS solo el trozo que contiene "physicalIndex", mas la cabecera
-// (head/count). Minimiza el desgaste de flash frente a regrabar todo el
-// buffer en cada muestra.
+// Bitmask de chunks modificados en RAM desde el ultimo volcado a NVS.
+// FIX: antes solo se persistia el chunk de la ULTIMA muestra escrita: si
+// las muestras acumuladas entre dos volcados caian a caballo entre dos
+// chunks, el chunk "viejo" se quedaba sin volcar mientras head/count en
+// NVS ya avanzaban. Un reinicio en ese instante (p.ej. brownout al
+// conmutar reles) dejaba el indice (head/count) desincronizado del
+// contenido real en flash de ese chunk, provocando entradas corruptas o
+// "fantasma" (timestamp=0) al recargar el historico.
+static uint16_t g_dirtyChunks = 0; // un bit por chunk (LOG_NUM_CHUNKS <= 16)
+
+// Vuelca a NVS TODOS los chunks marcados como sucios desde el ultimo
+// volcado, y solo al final actualiza la cabecera (head/count). Asi
+// head/count en NVS nunca queda por delante de un chunk sin persistir.
 //
 // Reutilizable: puede llamarse desde cualquier modulo que necesite forzar
 // el respaldo en NVS de un buffer circular con este mismo patron de chunks.
 //
-// Se "alimenta" el watchdog antes y despues de la escritura en flash:
+// Se "alimenta" el watchdog antes y despues de cada escritura en flash:
 // aunque ahora se llama con mucha menos frecuencia (ver
 // DATALOG_PERSIST_EVERY_N), esto actua como red de seguridad ante una
 // escritura NVS puntual mas lenta de lo normal (flash desgastada, etc.),
 // evitando que dispare un reset por watchdog en mitad de la operacion.
-static void persistChunk(uint16_t physicalIndex) {
-  int chunk = physicalIndex / LOG_CHUNK_ENTRIES;
+static void persistDirtyChunks() {
+  if (g_dirtyChunks == 0) return;
+
   esp_task_wdt_reset();
   prefsLog.begin("datalog", false);
+
+  char key[4];
+  for (int chunk = 0; chunk < LOG_NUM_CHUNKS; chunk++) {
+    if (!(g_dirtyChunks & (1 << chunk))) continue;
+    // Clave fija en stack (sin String): esto se llama en cada volcado a
+    // NVS, y usar String aqui iba fragmentando el heap con el tiempo
+    // hasta provocar un panic.
+    snprintf(key, sizeof(key), "c%d", chunk);
+    prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+  }
+
+  // head/count se escriben DESPUES de volcar todos los chunks sucios,
+  // para que nunca describan un estado mas avanzado que los datos
+  // realmente guardados.
   prefsLog.putUShort("head", g_head);
   prefsLog.putUShort("count", g_count);
-  // Clave fija en stack (sin String): esto se llama en cada volcado a NVS,
-  // y usar String aqui iba fragmentando el heap con el tiempo hasta
-  // provocar un panic.
-  char key[4];
-  snprintf(key, sizeof(key), "c%d", chunk);
-  prefsLog.putBytes(key, &g_log[chunk * LOG_CHUNK_ENTRIES], LOG_CHUNK_ENTRIES * sizeof(LogEntry));
+
   prefsLog.end();
+  g_dirtyChunks = 0;
   esp_task_wdt_reset();
 }
 
@@ -104,6 +134,7 @@ static void addEntry(uint8_t flags) {
   // porque persistChunk() necesita saber que trozo contiene la muestra
   // que se acaba de escribir (no el siguiente hueco libre).
   uint16_t writtenAt = g_head;
+  g_dirtyChunks |= (1 << (writtenAt / LOG_CHUNK_ENTRIES));
   g_head = (g_head + 1) % LOG_CAPACITY;
   if (g_count < LOG_CAPACITY) g_count++;
 
@@ -113,15 +144,18 @@ static void addEntry(uint8_t flags) {
   // del tiempo la muestra vive solo en RAM (g_log) hasta el proximo
   // volcado.
   //
-  // FIX: persistChunk() se llama AHORA (tras incrementar g_head/g_count),
-  // no antes. Antes se llamaba con los valores VIEJOS, asi que el head/
-  // count guardado en NVS quedaba permanentemente 1 muestra por detras
-  // de la realidad, y cada reinicio volvia a escribir (pisar) la ultima
-  // muestra que ya se habia guardado bien.
+  // FIX: en vez de volcar aqui mismo, se PROGRAMA el volcado
+  // (g_flushDueAt) para dentro de DATALOG_FLUSH_DELAY_MS. addEntry()
+  // suele llamarse justo cuando cambia un estado (bomba/valvulas), es
+  // decir, justo cuando se ha conmutado un rele: retrasar la escritura
+  // en flash evita que coincida con el pico de corriente de ese rele.
+  // El volcado real lo ejecuta datalogLoop() sin bloquear nada mientras
+  // tanto (no hay delay(), solo se compara millis() en cada vuelta).
   g_samplesSinceFlush++;
   bool shouldFlush = (g_samplesSinceFlush >= DATALOG_PERSIST_EVERY_N);
   if (shouldFlush) {
-    persistChunk(writtenAt);
+    g_flushPending = true;
+    g_flushDueAt   = millis() + DATALOG_FLUSH_DELAY_MS;
     g_samplesSinceFlush = 0;
   }
 
@@ -181,6 +215,14 @@ void datalogLoop() {
       Serial.println("[DATALOG] Evento registrado (cambio de estado)");
     }
   }
+
+  // Volcado retardado (ver DATALOG_FLUSH_DELAY_MS): no bloquea, solo
+  // comprueba si ya ha pasado el plazo. Mientras tanto el resto del
+  // loop (reles, web, sensores) sigue funcionando con normalidad.
+  if (g_flushPending && (long)(millis() - g_flushDueAt) >= 0) {
+    persistDirtyChunks();
+    g_flushPending = false;
+  }
 }
 
 // Borrado total de emergencia: limpia el buffer en RAM y borra por
@@ -194,6 +236,8 @@ void datalogFormat() {
   g_lastFlags = 0xFF;
   g_lastSampleMillis = 0;
   g_samplesSinceFlush = 0;
+  g_dirtyChunks = 0;
+  g_flushPending = false;
 
   prefsLog.begin("datalog", false);
   prefsLog.clear();
@@ -264,6 +308,8 @@ void datalogDeleteRange(uint32_t fromTs, uint32_t toTs) {
   g_count = kept;
   g_head  = kept % LOG_CAPACITY;
   g_samplesSinceFlush = 0; // esta operacion vuelca todo el buffer a continuacion
+  g_dirtyChunks = 0;       // todo queda persistido a continuacion, nada pendiente
+  g_flushPending = false;
 
   prefsLog.begin("datalog", false);
   prefsLog.putUShort("head", g_head);
