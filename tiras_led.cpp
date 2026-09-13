@@ -122,6 +122,13 @@ static LedProgram  g_programs[LEDS_MAX_PROGRAMS];
 
 static uint8_t  g_colorR = 255, g_colorG = 120, g_colorB = 0; // color base actual
 static uint8_t  g_brightness = 100;   // 0-100 %
+
+// Estado del reintento de sincronizacion de efecto entre tiras (ver
+// ledsApplyEffectToAllStrips/ledsFlushEffectRetry mas abajo). Declarado
+// aqui arriba porque ledsApplyColorToAllStrips necesita poder cancelarlo.
+static uint8_t       g_effectRetryCode    = 0;
+static uint8_t       g_effectRetriesLeft  = 0;
+static unsigned long g_effectRetryNextMs  = 0;
 static bool     g_power = false;      // ON/OFF general del grupo
 static uint8_t  g_effect = 0;         // 0 = sin efecto (color estatico); 1..LEDS_HW_EFFECT_COUNT = efecto nativo
 static uint8_t  g_speed = 50;         // 0-100 %, velocidad nativa del efecto en curso (solo aplica si g_effect>0)
@@ -467,9 +474,6 @@ static void ledsSendEffectSpeedToStrip(LedStrip &s, uint8_t speedPct) {
 // refuerzo de sincronizacion no bloqueante.
 #define LEDS_EFFECT_RESYNC_RETRIES 2      // reintentos ADICIONALES tras el primer envio
 #define LEDS_EFFECT_RESYNC_GAP_MS  300    // lapso entre cada reintento
-static uint8_t       g_effectRetryCode    = 0;
-static uint8_t       g_effectRetriesLeft  = 0;
-static unsigned long g_effectRetryNextMs  = 0;
 
 // Aplica un efecto de hardware (indice 1..LEDS_HW_EFFECT_COUNT) a todas
 // las tiras conectadas, seguido de la velocidad actual. effectIndex==0
