@@ -261,6 +261,7 @@ String diaglogToJson() {
 
 uint8_t diaglogEventClass(uint8_t reason, uint8_t breadcrumb) {
   switch ((esp_reset_reason_t)reason) {
+    case ESP_RST_UNKNOWN: return 0; // muestra periodica (no de arranque): no es un evento
     case ESP_RST_POWERON: return 0;
     case ESP_RST_EXT:
     case ESP_RST_SDIO:    return 2;
