@@ -174,7 +174,12 @@ function motivoTexto(s){
 // descendente). Reutilizable: recibe los valores ya extraidos, el color
 // de trazo y una funcion de formato opcional para las etiquetas de
 // referencia (min/max) que se dibujan sobre la propia grafica.
-function drawLineChart(canvas, values, strokeColorVar, height, fmtFn){
+//
+// recommendedValue es OPCIONAL: si no se pasa (undefined), la funcion
+// se comporta exactamente igual que antes. Si se pasa, se dibuja una
+// linea discontinua adicional (distinta de las guias min/max) marcando
+// el valor recomendado/seguro para esa metrica, con su propia etiqueta.
+function drawLineChart(canvas, values, strokeColorVar, height, fmtFn, recommendedValue){
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.parentElement.clientWidth;
   const H = height || 120;
@@ -191,8 +196,13 @@ function drawLineChart(canvas, values, strokeColorVar, height, fmtFn){
   }
 
   const fmt = fmtFn || (v => Math.round(v).toString());
-  const maxV = Math.max(...values) * 1.05;
-  const minV = Math.min(...values) * 0.95;
+  // Si hay un valor recomendado, se incluye en el rango para que la
+  // linea de referencia siempre sea visible aunque quede fuera del
+  // rango real de los datos (p.ej. heap actual muy por encima del minimo
+  // recomendado).
+  const allValues = recommendedValue !== undefined ? [...values, recommendedValue] : values;
+  const maxV = Math.max(...allValues) * 1.05;
+  const minV = Math.min(...allValues) * 0.95;
   const range = Math.max(maxV - minV, 1);
   // padR ampliado para dejar sitio a las etiquetas de valor minimo/maximo
   // (antes no se dibujaba ningun numero de referencia sobre la grafica).
@@ -223,6 +233,25 @@ function drawLineChart(canvas, values, strokeColorVar, height, fmtFn){
   ctx.textBaseline = 'middle';
   ctx.fillText(fmt(maxV), W-padR+4, y(maxV));
   ctx.fillText(fmt(minV), W-padR+4, y(minV));
+
+  // Linea de referencia del valor recomendado (opcional): trazo
+  // discontinuo mas largo que el de min/max para distinguirla a simple
+  // vista, en un tono ambar semitransparente (neutro, no choca con el
+  // color propio de cada curva).
+  if (recommendedValue !== undefined) {
+    ctx.strokeStyle = 'rgba(255,176,32,0.55)';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([6,4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, y(recommendedValue));
+    ctx.lineTo(W-padR, y(recommendedValue));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = 'rgba(255,176,32,0.85)';
+    ctx.font = '10px monospace';
+    ctx.fillText('rec. ' + fmt(recommendedValue), W-padR+4, y(recommendedValue));
+  }
 
   // Valor de la ultima muestra, en el color de la propia curva, para
   // saber de un vistazo el dato actual sin mirar la tabla.
@@ -309,9 +338,9 @@ async function loadData(){
   empty.style.display = 'none';
   tDiag.style.display = 'table';
 
-  drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120, fmtHeap);
-  drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70, fmtStack);
-  drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70, fmtMicros);
+  drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120, fmtHeap, 40000);
+  drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70, fmtStack, 1000);
+  drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70, fmtMicros, 100000);
 
   // Reinicios no normales: uptime alcanzado justo ANTES de cada uno.
   // OJO: la muestra que trae resetReason es la que se registra nada mas
