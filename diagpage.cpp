@@ -212,9 +212,17 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
   ctx.scale(dpr, dpr);
   ctx.clearRect(0,0,W,H);
 
+  // En PC el texto de las graficas tambien se agranda un 50% (igual que
+  // el resto de la pagina via la media query >=700px), ya que aqui se
+  // dibuja con canvas y no responde al CSS.
+  const esPc = window.innerWidth >= 700;
+  const fsHora  = esPc ? '14px monospace'      : '9px monospace';
+  const fsValor = esPc ? '15px monospace'      : '10px monospace';
+  const fsValorNegrita = esPc ? 'bold 15px monospace' : 'bold 10px monospace';
+
   if(values.length < 2){
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--dim');
-    ctx.font = '11px monospace';
+    ctx.font = esPc ? '17px monospace' : '11px monospace';
     ctx.fillText('Datos insuficientes todavia', 10, H/2);
     return;
   }
@@ -264,7 +272,7 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
     ctx.strokeStyle = '#1b2622';
     ctx.lineWidth = 1;
     ctx.fillStyle = dimColor;
-    ctx.font = '9px monospace';
+    ctx.font = fsHora;
     ctx.textAlign = 'center';
     let lastSlotKey = null;
     for (let i = 0; i < timestamps.length; i++) {
@@ -324,12 +332,12 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
   // y de las lineas de guia. Posiciones sin cambiar respecto a antes:
   // max/min y valor actual a la derecha (arriba/abajo y centro), valor
   // recomendado a la izquierda, centrado.
-  labelConFondo(fmt(maxV), W-padR, y(maxV), 'right', dimColor, '10px monospace');
-  labelConFondo(fmt(minV), W-padR, y(minV), 'right', dimColor, '10px monospace');
+  labelConFondo(fmt(maxV), W-padR, y(maxV), 'right', dimColor, fsValor);
+  labelConFondo(fmt(minV), W-padR, y(minV), 'right', dimColor, fsValor);
   if (recommendedValue !== undefined) {
-    labelConFondo('rec. ' + fmt(recommendedValue), padL, padT+plotH/2, 'left', 'rgba(255,176,32,0.85)', '10px monospace');
+    labelConFondo('rec. ' + fmt(recommendedValue), padL, padT+plotH/2, 'left', 'rgba(255,176,32,0.85)', fsValor);
   }
-  labelConFondo(fmt(values[values.length-1]), W-padR, padT+plotH/2, 'right', strokeColor, 'bold 10px monospace');
+  labelConFondo(fmt(values[values.length-1]), W-padR, padT+plotH/2, 'right', strokeColor, fsValorNegrita);
 }
 
 async function loadData(){
