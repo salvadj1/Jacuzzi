@@ -81,17 +81,17 @@ tr.detalle .grid{display:flex;flex-direction:column;gap:4px;}
    correcto por el zoom/densidad del dispositivo): se agranda todo un
    poco a partir de cierto ancho de viewport. */
 @media (min-width: 700px){
-  body{font-size:15px;}
-  h1{font-size:14px;}
-  .panel h2{font-size:12px;}
-  .tarjeta .lbl{font-size:11px;}
-  .tarjeta .val{font-size:18px;}
-  .tarjeta .sub{font-size:11px;}
-  table{font-size:13px;}
-  .tab-btn{font-size:11px;}
-  .filtro-row{font-size:13px;}
-  .slider-val{font-size:14px;}
-  a.back{font-size:12px;}
+  body{font-size:22px;}
+  h1{font-size:21px;}
+  .panel h2{font-size:18px;}
+  .tarjeta .lbl{font-size:16px;}
+  .tarjeta .val{font-size:27px;}
+  .tarjeta .sub{font-size:16px;}
+  table{font-size:20px;}
+  .tab-btn{font-size:16px;}
+  .filtro-row{font-size:20px;}
+  .slider-val{font-size:21px;}
+  a.back{font-size:18px;}
 }
 </style>
 </head>
@@ -228,17 +228,34 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
   const maxV = Math.max(...allValues) * 1.05;
   const minV = Math.min(...allValues) * 0.95;
   const range = Math.max(maxV - minV, 1);
-  // Las etiquetas de min/max van a la DERECHA (arriba y abajo, junto al
-  // valor actual); la de "rec." va a la IZQUIERDA, centrada verticalmente,
-  // para no competir por el mismo hueco.
-  const padL = 54, padR = 46, padT = 12, padB = 16;
+  const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--dim');
+  const strokeColor = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
+  const panelColor = getComputedStyle(document.documentElement).getPropertyValue('--panel');
+
+  // Dibuja un texto con un pequeño fondo detras (color del panel), para
+  // que se pueda leer aunque quede superpuesto sobre la curva o las
+  // lineas de guia. align: 'left'|'right'. baseline siempre 'middle'.
+  function labelConFondo(text, px, py, align, color, font){
+    ctx.font = font;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(text).width;
+    const bx = align === 'right' ? px - w - 3 : px - 3;
+    ctx.fillStyle = panelColor;
+    ctx.fillRect(bx, py-7, w+6, 14);
+    ctx.fillStyle = color;
+    ctx.fillText(text, px, py);
+  }
+
+  // La grafica ocupa TODO el ancho del recuadro: ya no se reserva hueco
+  // horizontal para las etiquetas, que ahora se dibujan superpuestas
+  // encima de la curva (ver labelConFondo). Solo se deja un margen
+  // vertical minimo para la fila de horas debajo del trazado.
+  const padL = 4, padR = 4, padT = 12, padB = 16;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const x = i => padL + (i/(values.length-1)) * plotW;
   const y = v => padT + plotH - ((v-minV)/range) * plotH;
-
-  const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--dim');
-  const strokeColor = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
 
   // Lineas verticales cada media hora en punto (:00 y :30), si hay
   // timestamps reales (requiere hora NTP sincronizada; si no hay ninguno
@@ -268,9 +285,8 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
     ctx.textAlign = 'left';
   }
 
-  // Linea guia horizontal en el minimo y en el maximo, con su valor de
-  // referencia escrito a la derecha de la grafica (arriba el maximo,
-  // abajo el minimo).
+  // Linea guia horizontal en el minimo y en el maximo (sin escribir aun
+  // su valor: eso se hace despues, superpuesto encima de todo).
   ctx.strokeStyle = '#22332c';
   ctx.lineWidth = 1;
   ctx.setLineDash([2,2]);
@@ -282,17 +298,10 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
   });
   ctx.setLineDash([]);
 
-  ctx.fillStyle = dimColor;
-  ctx.font = '10px monospace';
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  ctx.fillText(fmt(maxV), W-padR+4, y(maxV));
-  ctx.fillText(fmt(minV), W-padR+4, y(minV));
-
   // Linea de referencia del valor recomendado (opcional): trazo
   // discontinuo mas largo que el de min/max para distinguirla a simple
   // vista, en un tono ambar semitransparente (neutro, no choca con el
-  // color propio de cada curva). Etiqueta a la izquierda, centrada.
+  // color propio de cada curva).
   if (recommendedValue !== undefined) {
     ctx.strokeStyle = 'rgba(255,176,32,0.55)';
     ctx.lineWidth = 1.2;
@@ -302,27 +311,25 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
     ctx.lineTo(W-padR, y(recommendedValue));
     ctx.stroke();
     ctx.setLineDash([]);
-
-    ctx.fillStyle = 'rgba(255,176,32,0.85)';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText('rec. ' + fmt(recommendedValue), padL-4, padT+plotH/2);
-    ctx.textAlign = 'left';
   }
 
-  // Valor de la ultima muestra, en el color de la propia curva: se fija
-  // SIEMPRE centrado verticalmente entre el maximo y el minimo (no en la
-  // Y real del ultimo punto) para que nunca quede pegado ni se solape con
-  // las etiquetas de min/max, aunque la linea termine arriba o abajo.
-  ctx.fillStyle = strokeColor;
-  ctx.font = 'bold 10px monospace';
-  ctx.fillText(fmt(values[values.length-1]), W-padR+4, padT+plotH/2);
-
+  // La curva en si, a todo lo ancho del recuadro.
   ctx.strokeStyle = strokeColor;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   values.forEach((v,i) => { const px=x(i), py=y(v); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); });
   ctx.stroke();
+
+  // Etiquetas, dibujadas AL FINAL para que queden por encima de la curva
+  // y de las lineas de guia. Posiciones sin cambiar respecto a antes:
+  // max/min y valor actual a la derecha (arriba/abajo y centro), valor
+  // recomendado a la izquierda, centrado.
+  labelConFondo(fmt(maxV), W-padR, y(maxV), 'right', dimColor, '10px monospace');
+  labelConFondo(fmt(minV), W-padR, y(minV), 'right', dimColor, '10px monospace');
+  if (recommendedValue !== undefined) {
+    labelConFondo('rec. ' + fmt(recommendedValue), padL, padT+plotH/2, 'left', 'rgba(255,176,32,0.85)', '10px monospace');
+  }
+  labelConFondo(fmt(values[values.length-1]), W-padR, padT+plotH/2, 'right', strokeColor, 'bold 10px monospace');
 }
 
 async function loadData(){
