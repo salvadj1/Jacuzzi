@@ -1,6 +1,6 @@
 /*
  * diagpage.cpp
- * -----------------------------------------------------------------------
+ * ----------------------------------------------------------------------
  * Contenido HTML/CSS/JS de la pagina "/diag": tarjetas de estado actual,
  * grafica de heap en el tiempo y tabla con el historico completo (heap,
  * fragmentacion, stack, duracion de loop, wifi, sensores, motivo de
