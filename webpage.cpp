@@ -138,6 +138,27 @@ svg{width:100%;height:auto;display:block;}
 @keyframes ray{0%{opacity:0;}30%{opacity:.55;}100%{opacity:0;}}
 .statusbar{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;padding:10px 14px;background:#0d1512;border:1px solid var(--line);border-radius:6px;font-size:12px;}
 .statusbar .item{display:flex;align-items:center;gap:6px;color:var(--dim);}
+@media (max-width:480px){
+  .tcard-lbl{font-size:12px;}
+  .tcard-val{font-size:19px;}
+  .minibox .row{font-size:11px;padding:6px 0;}
+  .minibox .row .lbl{font-size:11px;}
+  .minibox .row b{font-size:12px;}
+  .minibox .row.mode b{font-size:12px;}
+  .minibox .row2 .cell{font-size:11px;}
+  .minibox .row2 .cell .lbl{font-size:11px;}
+  .minibox .row2 .cell b{font-size:12px;}
+  .minibox .row2 .cell.mode b{font-size:12px;}
+  .cb-lbl{font-size:12px;}
+  .cb-time{font-size:14px;}
+  .cb-date{font-size:12px;}
+  .cb-prog{font-size:12px;}
+  .cb-days{font-size:12px;}
+  .nb-lbl{font-size:12px;}
+  .nb-val{font-size:13px;}
+  .vlbl{font-size:14px;}
+  .pill{font-size:11px;padding:5px 10px;}
+}
 .statusbar .item b{color:var(--text);}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
 .dot.g{background:var(--green);box-shadow:0 0 6px var(--green);}
