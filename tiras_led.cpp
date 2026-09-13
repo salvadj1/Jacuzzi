@@ -61,8 +61,9 @@ static const char* LEDS_CHAR_UUID    = "0000fff3-0000-1000-8000-00805f9b34fb";
 // color/power vayan por la variante 0x00). g_effect = 0 significa "sin
 // efecto" (color estatico); g_effect = 1..LEDS_HW_EFFECT_COUNT indexa LEDS_HW_EFFECT_CODES
 // (index-1). Reutilizable en cualquier proyecto con esta misma tira.
-#define LEDS_HW_EFFECT_COUNT 22
+#define LEDS_HW_EFFECT_COUNT 29
 static const uint8_t LEDS_HW_EFFECT_CODES[LEDS_HW_EFFECT_COUNT] = {
+  0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86,
   0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x90, 0x91,
   0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0x9B, 0x9C
 };
@@ -358,7 +359,7 @@ static String ledsDescribeColor(uint8_t r, uint8_t g, uint8_t b) {
 
 // Envia color RGB (ya con el brillo aplicado) a una tira concreta.
 static void ledsSendColorToStrip(LedStrip &s, uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7E, 0x00, 0x05, 0x03, r, g, b, 0x00, 0xEF};
+  uint8_t cmd[9] = {0x7E, 0x07, 0x05, 0x03, r, g, b, 0x10, 0xEF};
   String desc = ledsDescribeColor(r, g, b) + ", brillo " + String(g_brightness) + "%";
   ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
 }
@@ -374,10 +375,35 @@ static void ledsSendPowerToStrip(LedStrip &s, bool on, const char *source = "?")
   ledsQueueOrSend(s, cmd, sizeof(cmd), on ? "encendido" : "apagado");
 }
 
+// Envia el comando NATIVO de brillo (0-100%) a una tira concreta, sin
+// tocar el color guardado en la tira. Reutilizable para cualquier tira
+// ELK-BLEDOM/LEDBLE que acepte esta variante de comando de brillo.
+static void ledsSendBrightnessToStrip(LedStrip &s, uint8_t pct) {
+  uint8_t cmd[9] = {0x7E, 0x04, 0x01, pct, 0xFF, 0xFF, 0xFF, 0x00, 0xEF};
+  char desc[24];
+  snprintf(desc, sizeof(desc), "brillo nativo %u%%", pct);
+  ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
+}
+
+// Aplica el brillo NATIVO a todas las tiras conectadas del grupo.
+static void ledsApplyBrightnessToAllStrips(uint8_t pct) {
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    Serial.println("[LEDS] Mutex BLE ocupado, brillo descartado");
+    return;
+  }
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].connected) {
+      ledsSendBrightnessToStrip(g_strips[i], pct);
+    }
+  }
+}
+
 // Aplica un color (con brillo ya escalado) a TODAS las tiras conectadas
 // del grupo. Es la funcion que usan tanto los comandos manuales como
 // cada paso de los efectos.
 static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b) {
+  g_effectRetriesLeft = 0; // un color manual cancela cualquier reintento de sincronizacion de efecto pendiente
   uint8_t sr = ledsScaleChannel(r, g_brightness);
   uint8_t sg = ledsScaleChannel(g, g_brightness);
   uint8_t sb = ledsScaleChannel(b, g_brightness);
@@ -413,7 +439,7 @@ static void ledsApplyPowerToAllStrips(bool on, const char *source) {
 // valores de LEDS_HW_EFFECT_CODES. Reutilizable para cualquier tira
 // ELK-BLEDOM/LEDBLE que acepte esta variante de comando de efectos.
 static void ledsSendEffectToStrip(LedStrip &s, uint8_t code) {
-  uint8_t cmd[9] = {0x7E, 0x07, 0x03, code, 0x03, 0xFF, 0xFF, 0x00, 0xEF};
+  uint8_t cmd[9] = {0x7E, 0x05, 0x03, code, 0x03, 0xFF, 0xFF, 0x00, 0xEF};
   char desc[24];
   snprintf(desc, sizeof(desc), "efecto hw 0x%02X", code);
   ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
@@ -429,6 +455,21 @@ static void ledsSendEffectSpeedToStrip(LedStrip &s, uint8_t speedPct) {
   snprintf(desc, sizeof(desc), "velocidad efecto %u%%", speedPct);
   ledsQueueOrSend(s, cmd, sizeof(cmd), desc);
 }
+
+// --- Reintento de sincronizacion de efecto entre tiras -----------------------
+// Al aplicar un efecto, el ESP32 solo tiene un radio BLE y debe repartir el
+// tiempo de aire entre todas las conexiones simultaneas: la entrega real de
+// cada comando puede llegar en instantes distintos a cada tira, dando un
+// efecto visible desincronizado. Reenviar el mismo comando un par de veces
+// mas (con un pequeño lapso) imita lo que ocurre al pulsar varias veces a
+// mano, y aumenta la probabilidad de que las tiras acaben alineadas.
+// Reutilizable para cualquier comando de efecto BLE que necesite este
+// refuerzo de sincronizacion no bloqueante.
+#define LEDS_EFFECT_RESYNC_RETRIES 2      // reintentos ADICIONALES tras el primer envio
+#define LEDS_EFFECT_RESYNC_GAP_MS  300    // lapso entre cada reintento
+static uint8_t       g_effectRetryCode    = 0;
+static uint8_t       g_effectRetriesLeft  = 0;
+static unsigned long g_effectRetryNextMs  = 0;
 
 // Aplica un efecto de hardware (indice 1..LEDS_HW_EFFECT_COUNT) a todas
 // las tiras conectadas, seguido de la velocidad actual. effectIndex==0
@@ -448,6 +489,28 @@ static void ledsApplyEffectToAllStrips(uint8_t effectIndex) {
       ledsSendEffectSpeedToStrip(g_strips[i], g_speed);
     }
   }
+  // Programa los reintentos de resincronizacion (los cancela y reemplaza
+  // si ya habia unos en curso de un efecto/pulsacion anterior).
+  g_effectRetryCode   = code;
+  g_effectRetriesLeft = LEDS_EFFECT_RESYNC_RETRIES;
+  g_effectRetryNextMs = millis() + LEDS_EFFECT_RESYNC_GAP_MS;
+}
+
+// Reenvia (no bloqueante) el ultimo comando de efecto aplicado, si toca
+// segun el lapso programado. Se llama en cada vuelta de ledsLoop().
+static void ledsFlushEffectRetry() {
+  if (g_effectRetriesLeft == 0) return;
+  if (millis() < g_effectRetryNextMs) return;
+
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) return; // se reintentara en la siguiente vuelta, sin perder el contador
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].connected) {
+      ledsSendEffectToStrip(g_strips[i], g_effectRetryCode);
+    }
+  }
+  g_effectRetriesLeft--;
+  g_effectRetryNextMs = millis() + LEDS_EFFECT_RESYNC_GAP_MS;
 }
 
 // ============================================================================
@@ -986,6 +1049,15 @@ const el = id => document.getElementById(id);
 // (salto / crossfade / blink) solo para la interfaz; "colors" es la
 // aproximacion visual usada en el preview animado, no afecta al hardware.
 const EFF_CATS = [
+  { key:'estatico', label:'Estaticos', items:[
+    {name:'Estatico rojo', colors:['#ff0000']},
+    {name:'Estatico azul', colors:['#0000ff']},
+    {name:'Estatico verde', colors:['#00ff00']},
+    {name:'Estatico cian', colors:['#00ffff']},
+    {name:'Estatico amarillo', colors:['#ffff00']},
+    {name:'Estatico purpura', colors:['#aa00ff']},
+    {name:'Estatico blanco', colors:['#ffffff']},
+  ]},
   { key:'salto', label:'Saltos', items:[
     {name:'Salto RGB', colors:['#ff0000','#00ff00','#0000ff']},
     {name:'Salto multicolor', colors:['#ff0000','#00ff00','#0000ff','#ffff00','#ff00ff','#00ffff']},
@@ -1001,6 +1073,7 @@ const EFF_CATS = [
     {name:'Crossfade magenta', colors:['#ff00ff','#330033']},
     {name:'Crossfade blanco', colors:['#ffffff','#444444']},
     {name:'Crossfade rojo+verde', colors:['#ff8800','#331a00']},
+    {name:'Crossfade rojo+azul', colors:['#aa00ff','#220033']},
     {name:'Crossfade verde+azul', colors:['#88ff00','#223300']},
   ]},
   { key:'blink', label:'Blink', items:[
@@ -1406,6 +1479,8 @@ static void ledsHandleCommand(const String &jsonStr) {
     if (g_power) {
       if (g_effect == 0) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
       else ledsApplyEffectToAllStrips(g_effect);
+    } else {
+      g_effectRetriesLeft = 0; // apagar cancela cualquier reintento de sincronizacion pendiente
     }
     ledsApplyPowerToAllStrips(g_power, "cmd-setPower");
     ledsSaveSettings();
@@ -1420,8 +1495,11 @@ static void ledsHandleCommand(const String &jsonStr) {
 
   } else if (cmd == "setBrightness") {
     g_brightness = constrain((int)(doc["value"] | g_brightness), 0, 100);
-    // El brillo simulado (escalado RGB) solo aplica sin efecto de hardware
-    // en curso: un efecto nativo gestiona su propia intensidad en la tira.
+    // Brillo nativo: se envia siempre que haya potencia, tanto con color
+    // fijo como con efecto de hardware en curso (ya no depende de g_effect).
+    if (g_power) ledsApplyBrightnessToAllStrips(g_brightness);
+    // Se mantiene tambien el escalado de color como refuerzo cuando no hay
+    // efecto activo (compatibilidad si alguna tira ignora el brillo nativo).
     if (g_power && g_effect == 0) ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
     ledsSaveSettings();
 
@@ -1680,6 +1758,9 @@ static void ledsReconnectTaskFunc(void* pvParameters) {
 void ledsLoop() {
   // --- Vacia la cola de comandos BLE pendientes por tira (no bloqueante) ---
   ledsFlushPendingTx();
+
+  // --- Reintentos de resincronizacion de efecto entre tiras ---
+  ledsFlushEffectRetry();
 
   // --- Programa horario ---
   ledsApplySchedule();
