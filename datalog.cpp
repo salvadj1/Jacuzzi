@@ -209,6 +209,11 @@ void datalogLoop() {
   bool timeToSample  = (millis() - g_lastSampleMillis) >= LOG_SAMPLE_INTERVAL_MS;
   bool stateChanged  = (flags != g_lastFlags);
 
+  // Solo se registra en modo automatico: si el usuario esta operando en
+  // manual (bomba/solar/filtracion a mano), no queremos que el historico
+  // se ensucie con esas maniobras puntuales.
+  if (!g_state.autoEnabled) return;
+
   if (timeToSample || stateChanged) {
     addEntry(flags);
     if (stateChanged) {

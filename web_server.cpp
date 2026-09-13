@@ -68,7 +68,7 @@ static String buildStateJson() {
 }
 
 // Procesa un comando JSON recibido desde el navegador por WebSocket
-static void handleCommand(const String &jsonStr) {
+static void handleCommand(const String &jsonStr, AsyncWebSocketClient *client) {
   StaticJsonDocument<512> doc;
   if (deserializeJson(doc, jsonStr) != DeserializationError::Ok) {
     Serial.println("[WEB] Comando recibido con JSON invalido, se ignora");
@@ -87,6 +87,21 @@ static void handleCommand(const String &jsonStr) {
 
   } else if (cmd == "setForceSolar") {
     bool solar = doc["solar"] | false;
+    if (g_state.autoEnabled) {
+      // En modo automatico, SOLAR/FILTRACION manual queda bloqueado: no se
+      // ejecuta la orden y se avisa solo al cliente que la pulso para que
+      // haga parpadear su boton en rojo (no se registra en el datalog).
+      Serial.println("[WEB] Solar/Filtracion manual ignorado: modo automatico activo");
+      if (client) {
+        StaticJsonDocument<128> reject;
+        reject["reject"] = "forceSolar";
+        reject["solar"]  = solar;
+        String out;
+        serializeJson(reject, out);
+        client->text(out);
+      }
+      return; // no se toca el estado ni se hace broadcast
+    }
     setForceSolar(solar);
 
   } else if (cmd == "setTargetTemp") {
@@ -169,7 +184,7 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
       String msg((char*)data, len);
-      handleCommand(msg);
+      handleCommand(msg, client);
     }
   }
 }

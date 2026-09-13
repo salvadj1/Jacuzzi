@@ -99,7 +99,7 @@ tr.detalle .grid{display:flex;flex-direction:column;gap:4px;}
 <div class="wrap">
   <h1>DIAGNOSTICO
     <span class="links">
-      <a class="back" id="btnBorrar" href="#" style="color:var(--red);border-color:var(--red);">BORRAR REGISTROS</a>
+      <a class="back" id="btnBorrar" href="#" style="color:var(--red);border-color:var(--red);">FORMATEAR</a>
       <a class="back" href="/">&larr; VOLVER</a>
     </span>
   </h1>

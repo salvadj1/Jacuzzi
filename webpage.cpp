@@ -47,8 +47,10 @@ svg{width:100%;height:auto;display:block;}
 .minibox .row b{color:#ebed8f;font-weight:900;font-size:15px;}
 .minibox .row.mode b{color:var(--green);font-size:16px;}
 .discharge-bar{display:none;background:#1a1408;border:1px solid var(--amber);border-radius:6px;padding:8px 12px;margin-bottom:6px;text-align:center;}
-.discharge-bar.on{display:block;}
+.discharge-bar.on{display:block;animation:dischargeBlink 3s step-start infinite;}
 .discharge-bar b{color:var(--amber);font-size:13px;letter-spacing:.5px;}
+@keyframes dischargeBlink{0%{background:#1a1408;}0.1%{background:#5a0f0f;}33%{background:#5a0f0f;}33.1%{background:#1a1408;}}
+.reject-blink{background:#c0392b!important;border-color:#c0392b!important;color:#fff!important;}
 .minibox .row2{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:10px 0;border-bottom:1px solid #223229;}
 .pillrow{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
 .pill{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;padding:7px 14px;border-radius:22px;background:#0d2a19;color:#9fe1cb;}
@@ -406,6 +408,25 @@ let clockOffsetMs = 0;      // diferencia entre la hora del ESP32 y el reloj loc
 let ws = null;
 
 const el = id => document.getElementById(id);
+
+// Hace parpadear en rojo un boton 5 veces (usado cuando se rechaza un
+// comando manual por estar el modo automatico activo). Reutilizable con
+// cualquier id de boton.
+function blinkReject(buttonId){
+  const btn = el(buttonId);
+  if (!btn || btn.dataset.blinking === '1') return; // evita solaparse si se pulsa varias veces
+  btn.dataset.blinking = '1';
+  let count = 0;
+  const iv = setInterval(()=>{
+    btn.classList.toggle('reject-blink');
+    count++;
+    if (count >= 10) { // 10 toggles = 5 parpadeos completos (on/off)
+      clearInterval(iv);
+      btn.classList.remove('reject-blink');
+      btn.dataset.blinking = '0';
+    }
+  }, 150);
+}
 const DIAS_LBL = ['D','L','M','X','J','V','S'];
 
 // ---- Conexion WebSocket con el ESP32 ----
@@ -413,6 +434,12 @@ function connectWs(){
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onmessage = (ev)=>{
     const data = JSON.parse(ev.data);
+    if (data.reject === 'forceSolar') {
+      // Comando SOLAR/FILTRACION ignorado por estar en modo automatico:
+      // no es un estado nuevo, solo avisa a este mismo cliente.
+      blinkReject(data.solar ? 'btnForceSolar' : 'btnForceBypass');
+      return;
+    }
     state = data;
     clockOffsetMs = (data.clock*1000) - Date.now();
     render();
