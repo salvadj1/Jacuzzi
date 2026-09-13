@@ -51,7 +51,15 @@ canvas#resetChart{display:block;width:100%;height:90px;}
 table{width:100%;border-collapse:collapse;font-size:11px;}
 th{color:var(--dim);text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);font-weight:700;position:sticky;top:0;background:var(--panel);}
 td{padding:6px 6px;border-bottom:1px solid #1b2622;white-space:nowrap;}
-tr.evento td{color:var(--amber);font-weight:700;}
+tr.evento-anomalo td{color:var(--red);font-weight:700;}
+tr.evento-deliberado td{color:var(--amber);font-weight:700;}
+tr.evento-externo td{color:var(--text);font-weight:700;}
+td.toggle{cursor:pointer;color:var(--dim);width:18px;text-align:center;}
+tr.detalle{display:none;}
+tr.detalle td{background:#0d1512;color:var(--dim);font-size:10px;padding:8px 10px;}
+tr.detalle .grid{display:flex;flex-wrap:wrap;gap:4px 16px;}
+.filtro-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);margin-bottom:8px;}
+.filtro-row input{accent-color:var(--amber);}
 .tabla-scroll{max-height:55vh;overflow-y:auto;}
 #emptyMsg{color:var(--dim);font-size:12px;text-align:center;padding:30px 10px;}
 .minigraficas{display:flex;gap:10px;flex-wrap:wrap;}
@@ -91,6 +99,14 @@ tr.evento td{color:var(--amber);font-weight:700;}
       <h2>Loop mas lento por muestra</h2>
       <div class="chart-wrap"><canvas id="loopChart"></canvas></div>
     </div>
+    <div class="minigrafica">
+      <h2>Señal WiFi (RSSI)</h2>
+      <div class="chart-wrap"><canvas id="rssiChart"></canvas></div>
+    </div>
+    <div class="minigrafica">
+      <h2>Errores NTC acumulados</h2>
+      <div class="chart-wrap"><canvas id="ntcChart"></canvas></div>
+    </div>
   </div>
 
   <div class="panel" id="panelReinicios" style="display:none;">
@@ -108,12 +124,13 @@ tr.evento td{color:var(--amber);font-weight:700;}
   </div>
 
   <div class="panel">
+    <label class="filtro-row"><input type="checkbox" id="chkSoloEventos"> Mostrar solo reinicios/eventos</label>
     <div class="tabla-scroll">
       <div id="emptyMsg" style="display:none;">Aun no hay muestras de diagnostico.</div>
 
       <table id="tablaDiag" style="display:none;">
         <thead>
-          <tr><th>Fecha/hora</th><th>Uptime</th><th>Heap libre</th><th>Heap max. asignable</th><th>Stack libre min.</th><th>Loop max.</th><th>WiFi</th><th>RSSI</th><th>Clientes</th><th>Reconex. WiFi</th><th>Errores NTC</th><th>Motivo arranque</th></tr>
+          <tr><th></th><th>Fecha/hora</th><th>Uptime</th><th>WiFi</th><th>Heap libre</th><th>Motivo arranque</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -122,23 +139,16 @@ tr.evento td{color:var(--amber);font-weight:700;}
 </div>
 
 <script>
-// IMPORTANTE: estos indices deben coincidir exactamente con el enum
-// esp_reset_reason_t de ESP-IDF (ver esp_system.h). Antes estaba
-// desplazado un puesto y mezclaba, por ejemplo, brownout con "salida de
-// deep sleep".
-const MOTIVOS = {
-  0:'Desconocido', 1:'Encendido normal', 2:'Reset externo', 3:'Reinicio por software',
-  4:'PANIC (crash)', 5:'Watchdog interno', 6:'Watchdog de tarea',
-  7:'Otro watchdog', 8:'Salida deep sleep', 9:'Brownout',
-  10:'Reset via SDIO'
-};
-
 // Indices del array de cada muestra devuelto por /api/diag (ver
-// diaglogToJson en diaglog.cpp): deben coincidir exactamente.
+// diaglogToJson en diaglog.cpp): deben coincidir exactamente. El texto del
+// motivo y su severidad ya vienen calculados desde el ESP32 (una sola
+// fuente de verdad, ver diaglogResetReasonText/diaglogEventClass), asi que
+// aqui no se duplica ninguna tabla de traduccion.
 const IDX = {
   ts:0, freeHeap:1, minFreeHeap:2, maxAllocHeap:3, uptime:4,
   loopMax:5, stackMin:6, rssi:7, wsClients:8, wifiOk:9,
-  resetReason:10, breadcrumb:11, wifiReconnects:12, ntcErrors:13
+  resetReason:10, resetReasonText:11, breadcrumb:12, wifiReconnects:13,
+  ntcErrors:14, eventClass:15
 };
 
 function fmtUptime(sec){
@@ -161,11 +171,10 @@ function fmtMicros(us){
   return (us/1000000).toFixed(1)+' s';
 }
 function motivoTexto(s){
-  const reason = s[IDX.resetReason];
-  const esEvento = reason && reason !== 1;
-  const base = MOTIVOS[reason] || (esEvento ? 'Codigo '+reason : '-');
+  const txt = s[IDX.resetReasonText];
+  if(!txt) return '-';
   const crumb = s[IDX.breadcrumb];
-  return (esEvento && crumb) ? (base+' — en: '+crumb) : base;
+  return crumb ? (txt+' — en: '+crumb) : txt;
 }
 
 // Dibuja una curva generica (heap, stack, loop...) en el tiempo. Sin zoom
@@ -341,6 +350,8 @@ async function loadData(){
   drawLineChart(document.getElementById('heapChart'), samples.map(s=>s[IDX.freeHeap]), '--water', 120, fmtHeap, 40000);
   drawLineChart(document.getElementById('stackChart'), samples.map(s=>s[IDX.stackMin]), '--green', 70, fmtStack, 1000);
   drawLineChart(document.getElementById('loopChart'), samples.map(s=>s[IDX.loopMax]), '--amber', 70, fmtMicros, 100000);
+  drawLineChart(document.getElementById('rssiChart'), samples.map(s=>s[IDX.rssi]), '--water', 70, v=>Math.round(v)+' dBm', -70);
+  drawLineChart(document.getElementById('ntcChart'), samples.map(s=>s[IDX.ntcErrors]), '--red', 70, v=>Math.round(v));
 
   // Reinicios no normales: uptime alcanzado justo ANTES de cada uno.
   // OJO: la muestra que trae resetReason es la que se registra nada mas
@@ -349,19 +360,19 @@ async function loadData(){
   // Lo que interesa es el uptime de la muestra ANTERIOR (la ultima vez que
   // se supo que seguia vivo antes del cuelgue). Antes se usaba el uptime
   // de la propia muestra de reinicio, por eso la grafica salia siempre
-  // vacia/plana (barras a 0).
+  // vacia/plana (barras a 0). eventClass (0=normal) viene ya calculado
+  // desde el ESP32, evitando que una fila corrupta/fantasma cuente como
+  // evento (ver el clamp de head/count en diaglogInit).
   const uptimesAntesDeReinicio = [];
   for(let i=0; i<samples.length; i++){
-    const s = samples[i];
-    const esEvento = s[IDX.resetReason] && s[IDX.resetReason] !== 1;
-    if(esEvento && i>0) uptimesAntesDeReinicio.push(samples[i-1][IDX.uptime]);
+    if(samples[i][IDX.eventClass] > 0 && i>0) uptimesAntesDeReinicio.push(samples[i-1][IDX.uptime]);
   }
   document.getElementById('panelReinicios').style.display = uptimesAntesDeReinicio.length ? 'block' : 'none';
   if(uptimesAntesDeReinicio.length) drawResetBars(document.getElementById('resetChart'), uptimesAntesDeReinicio);
 
   // Resumen: ultima muestra + numero de arranques detectados en el historico
   const last = samples[samples.length-1];
-  const arranques = samples.filter(s => s[IDX.resetReason] && s[IDX.resetReason] !== 1).length;
+  const arranques = samples.filter(s => s[IDX.eventClass] > 0).length;
 
   const heapClass = last[IDX.freeHeap] < 20000 ? 'bad' : (last[IDX.freeHeap] < 40000 ? 'warn' : 'ok');
 
@@ -389,29 +400,48 @@ async function loadData(){
   const cDiag = tDiag.querySelector('tbody');
   cDiag.innerHTML = '';
 
+  const soloEventos = document.getElementById('chkSoloEventos').checked;
+  const CLASES = {1:'evento-deliberado', 2:'evento-externo', 3:'evento-anomalo'};
+
   // Se muestran de mas reciente a mas antigua
   for(let i = samples.length-1; i>=0; i--){
     const s = samples[i];
-    const esEvento = s[IDX.resetReason] && s[IDX.resetReason] !== 1;
+    const ec = s[IDX.eventClass];
+    if(soloEventos && ec === 0) continue;
 
     const tr = document.createElement('tr');
-    if(esEvento) tr.className = 'evento';
+    if(CLASES[ec]) tr.className = CLASES[ec];
     tr.innerHTML =
+      '<td class="toggle">&#9656;</td>'+
       '<td>'+fmtFecha(s[IDX.ts])+'</td>'+
       '<td>'+fmtUptime(s[IDX.uptime])+'</td>'+
+      '<td>'+(s[IDX.wifiOk] ? s[IDX.rssi]+' dBm' : 'Sin red')+'</td>'+
       '<td>'+fmtHeap(s[IDX.freeHeap])+'</td>'+
-      '<td>'+fmtHeap(s[IDX.maxAllocHeap])+'</td>'+
-      '<td>'+fmtStack(s[IDX.stackMin])+'</td>'+
-      '<td>'+fmtMicros(s[IDX.loopMax])+'</td>'+
-      '<td>'+(s[IDX.wifiOk] ? 'Conectado' : 'Sin red')+'</td>'+
-      '<td>'+(s[IDX.wifiOk] ? s[IDX.rssi]+' dBm' : '-')+'</td>'+
-      '<td>'+s[IDX.wsClients]+'</td>'+
-      '<td>'+s[IDX.wifiReconnects]+'</td>'+
-      '<td>'+s[IDX.ntcErrors]+'</td>'+
       '<td>'+motivoTexto(s)+'</td>';
+
+    const trDetalle = document.createElement('tr');
+    trDetalle.className = 'detalle';
+    trDetalle.innerHTML = '<td colspan="6"><div class="grid">'+
+      '<span>Heap max. asignable: '+fmtHeap(s[IDX.maxAllocHeap])+'</span>'+
+      '<span>Stack libre min.: '+fmtStack(s[IDX.stackMin])+'</span>'+
+      '<span>Loop mas lento: '+fmtMicros(s[IDX.loopMax])+'</span>'+
+      '<span>Clientes web: '+s[IDX.wsClients]+'</span>'+
+      '<span>Reconex. WiFi: '+s[IDX.wifiReconnects]+'</span>'+
+      '<span>Errores NTC: '+s[IDX.ntcErrors]+'</span>'+
+      '</div></td>';
+
+    tr.querySelector('.toggle').addEventListener('click', () => {
+      const visible = trDetalle.style.display === 'table-row';
+      trDetalle.style.display = visible ? 'none' : 'table-row';
+      tr.querySelector('.toggle').innerHTML = visible ? '&#9656;' : '&#9662;';
+    });
+
     cDiag.appendChild(tr);
+    cDiag.appendChild(trDetalle);
   }
 }
+
+document.getElementById('chkSoloEventos').addEventListener('change', loadData);
 
 
 // Borra el historico de diagnostico en el ESP32 (con confirmacion, ya

@@ -92,6 +92,19 @@ void diaglogInit() {
   prefsDiag.begin("diaglog", true);
   g_head  = prefsDiag.getUShort("head", 0);
   g_count = prefsDiag.getUShort("count", 0);
+  // Proteccion: si DIAG_LOG_CAPACITY cambio desde la ultima vez que se
+  // guardo (como paso al reducirla de 400 a 200, ver config.h), head/count
+  // guardados en NVS pueden apuntar fuera del array g_diag actual. Sin este
+  // chequeo, "g_diag[g_head] = e" en addEntry() seria un acceso fuera de
+  // rango (memoria corrupta), y ademas diaglogToJson() mostraria muestras
+  // "fantasma" nunca escritas con la capacidad nueva (heap 0, sin hora, tal
+  // como se vio en el historico real). Ante la duda, se descarta el
+  // historico incompatible y se empieza de cero.
+  if (g_head >= DIAG_LOG_CAPACITY_ENTRIES || g_count > DIAG_LOG_CAPACITY_ENTRIES) {
+    Serial.println("[DIAG] head/count de NVS incompatibles con la capacidad actual, reiniciando historico.");
+    g_head = 0;
+    g_count = 0;
+  }
   g_intervalMs = prefsDiag.getUInt("intervalMs", DIAG_SAMPLE_INTERVAL_MS);
   for (int chunk = 0; chunk < DIAG_NUM_CHUNKS; chunk++) {
     String key = "c" + String(chunk);
@@ -209,16 +222,19 @@ DiagEntry diaglogGet(int index) {
 // Indices del array por muestra (deben coincidir con diagpage.cpp):
 // 0 timestamp, 1 freeHeap, 2 minFreeHeap, 3 maxAllocHeap, 4 uptimeSec,
 // 5 maxLoopMicros, 6 minStackBytes, 7 rssi, 8 wsClients, 9 wifiConnected,
-// 10 resetReason, 11 breadcrumb(texto), 12 wifiReconnects, 13 ntcErrors
+// 10 resetReason, 11 resetReasonTexto, 12 breadcrumb(texto),
+// 13 wifiReconnects, 14 ntcErrors, 15 eventClass (0 normal, 1 deliberado,
+// 2 externo, 3 anomalo; ver diaglogEventClass)
 String diaglogToJson() {
   int n = diaglogCount();
   String out;
-  out.reserve(n * 80 + 32);
+  out.reserve(n * 100 + 32);
   out += "{\"intervalMs\":";
   out += diaglogGetIntervalMs();
   out += ",\"samples\":[";
   for (int i = 0; i < n; i++) {
     DiagEntry e = diaglogGet(i);
+    bool esEvento = (e.resetReason && e.resetReason != 1);
     if (i > 0) out += ',';
     out += '[';
     out += e.timestamp;      out += ',';
@@ -232,13 +248,32 @@ String diaglogToJson() {
     out += e.wsClients;      out += ',';
     out += e.wifiConnected;  out += ',';
     out += e.resetReason;    out += ',';
-    out += '"'; out += (e.resetReason && e.resetReason != 1) ? diaglogStageText(e.breadcrumb) : ""; out += '"'; out += ',';
+    out += '"'; out += esEvento ? diaglogResetReasonText(e.resetReason) : ""; out += '"'; out += ',';
+    out += '"'; out += esEvento ? diaglogStageText(e.breadcrumb) : ""; out += '"'; out += ',';
     out += e.wifiReconnects; out += ',';
-    out += e.ntcErrors;
+    out += e.ntcErrors;      out += ',';
+    out += diaglogEventClass(e.resetReason, e.breadcrumb);
     out += ']';
   }
   out += "]}";
   return out;
+}
+
+uint8_t diaglogEventClass(uint8_t reason, uint8_t breadcrumb) {
+  switch ((esp_reset_reason_t)reason) {
+    case ESP_RST_POWERON: return 0;
+    case ESP_RST_EXT:
+    case ESP_RST_SDIO:    return 2;
+    case ESP_RST_SW:
+      return (breadcrumb == DIAG_STAGE_NTP_TIMEOUT || breadcrumb == DIAG_STAGE_NTP_TIMEOUT_NOWIFI) ? 1 : 2;
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT:
+      return 3;
+    default: return 3; // codigo desconocido: mejor tratarlo como anomalo que ignorarlo
+  }
 }
 
 const char* diaglogResetReasonText(uint8_t reason) {

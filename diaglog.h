@@ -123,6 +123,15 @@ String diaglogToJson();
 // que traducir el codigo numerico en el navegador).
 const char* diaglogResetReasonText(uint8_t reason);
 
+// Clasifica la severidad de un arranque para colorear la tabla/graficas
+// en la web, sin que el JS tenga que mantener su propia copia de las
+// reglas: 0 = arranque normal (encendido), 1 = reinicio deliberado por
+// software con motivo conocido (p.ej. timeout de NTP), 2 = reset externo
+// o por software sin breadcrumb reconocido (boton RESET, OTA, o un
+// ESP.restart() manual), 3 = anomalo (panic, watchdog o brownout: un
+// cuelgue o crash real). Se envia ya calculado en el JSON de /api/diag.
+uint8_t diaglogEventClass(uint8_t reason, uint8_t breadcrumb);
+
 // ---------------- Intervalo de muestreo ajustable ----------------
 // Limites permitidos para el slider de la web (minutos).
 #define DIAG_INTERVAL_MIN_MINUTES 1
