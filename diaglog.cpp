@@ -1,22 +1,37 @@
 /*
  * diaglog.cpp
  * -----------------------------------------------------------------------
- * Implementacion del modulo de registro de diagnostico. Ver diaglog.h
- * para el diseño general (buffer circular en RAM + respaldo en NVS por
- * trozos, igual patron que datalog.cpp).
+ * Implementacion del modulo de registro de diagnostico como CLIENTE del
+ * servidor remoto (mismo servidor Python que datalog.cpp, endpoints
+ * /api/diag). Ver diaglog.h para el diseño general.
+ *
+ * Igual patron que datalog.cpp: cola FreeRTOS + tarea en segundo plano
+ * para no bloquear el loop() principal, y un pequeño buffer de
+ * emergencia en RAM si el servidor no responde.
+ *
+ * Lo que SIGUE siendo local (a proposito, ver diaglog.h): el breadcrumb
+ * de memoria RTC (g_rtcStage) y el pico de duracion de loop()
+ * (g_maxLoopMicros). Ninguno de los dos depende de red ni del servidor,
+ * precisamente porque su trabajo es registrar POR QUE se colgo el
+ * firmware, y el momento en que eso pasa es el peor momento posible para
+ * depender de que una peticion HTTP funcione.
  * -----------------------------------------------------------------------
  */
 #include "diaglog.h"
 #include "config.h"
 #include <Preferences.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <esp_system.h>
 #include <time.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/task.h> // uxTaskGetStackHighWaterMark
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 
-// Namespace propio en NVS para no mezclar con datalog.cpp ni storage.cpp
+// Namespace propio en NVS: ya SOLO se usa para persistir el intervalo de
+// muestreo (4 bytes), no el historico completo como antes.
 static Preferences prefsDiag;
 
 // Memoria RTC: sobrevive a resets por software/panic/watchdog/brownout
@@ -27,34 +42,216 @@ static RTC_NOINIT_ATTR uint8_t g_rtcStage;
 // Pico de duracion de loop() desde la ultima muestra registrada
 static uint32_t g_maxLoopMicros = 0;
 
-#define DIAG_CHUNK_ENTRIES 50
-#define DIAG_NUM_CHUNKS (DIAG_LOG_CAPACITY_ENTRIES / DIAG_CHUNK_ENTRIES)
-
-static DiagEntry g_diag[DIAG_LOG_CAPACITY_ENTRIES];
-static uint16_t g_head  = 0;
-static uint16_t g_count = 0;
-
 static unsigned long g_lastSampleMillis = 0;
 
 // Intervalo de muestreo actual (arranca con el valor de config.h hasta
 // que diaglogInit() lo sobreescriba con lo guardado en NVS, si lo hay).
 static uint32_t g_intervalMs = DIAG_SAMPLE_INTERVAL_MS;
 
-static void persistChunk(uint16_t physicalIndex) {
-  int chunk = physicalIndex / DIAG_CHUNK_ENTRIES;
-  prefsDiag.begin("diaglog", false);
-  prefsDiag.putUShort("head", g_head);
-  prefsDiag.putUShort("count", g_count);
-  // Igual que en datalog.cpp: clave fija sin String para no fragmentar
-  // el heap en cada muestra periodica.
-  char key[4];
-  snprintf(key, sizeof(key), "c%d", chunk);
-  prefsDiag.putBytes(key, &g_diag[chunk * DIAG_CHUNK_ENTRIES], DIAG_CHUNK_ENTRIES * sizeof(DiagEntry));
-  prefsDiag.end();
+// ---------------- Cola de envio (loop() -> tarea HTTP) ----------------
+static QueueHandle_t g_sendQueue = nullptr;
+
+// ---------------- Buffer circular de emergencia (solo RAM) ----------------
+// Igual patron que datalog.cpp: colchon pequeño para no perder muestras
+// durante un corte puntual del servidor, protegido con mutex porque lo
+// tocan tanto la tarea de envio como diaglogToJson() (contexto web).
+static DiagEntry         g_fallback[DIAG_LOG_CAPACITY_ENTRIES];
+static uint16_t          g_fbHead  = 0;
+static uint16_t          g_fbCount = 0;
+static SemaphoreHandle_t g_fbMutex = nullptr;
+
+static void fallbackPush(const DiagEntry &e) {
+  xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+  g_fallback[g_fbHead] = e;
+  g_fbHead = (g_fbHead + 1) % DIAG_LOG_CAPACITY_ENTRIES;
+  if (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) g_fbCount++;
+  xSemaphoreGive(g_fbMutex);
 }
 
-// Añade una nueva muestra al buffer circular y la persiste en NVS.
-// "resetReason" y "breadcrumb" solo se rellenan en la muestra de arranque.
+static void fallbackClear() {
+  xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+  g_fbHead = 0;
+  g_fbCount = 0;
+  xSemaphoreGive(g_fbMutex);
+}
+
+// ---------------- Textos / clasificacion (puramente locales, sin red) ----------------
+
+const char* diaglogStageText(uint8_t stage) {
+  switch ((DiagStage)stage) {
+    case DIAG_STAGE_BOOT:         return "Arranque";
+    case DIAG_STAGE_LOOP_WIFI:    return "loopWifi";
+    case DIAG_STAGE_OTA:          return "loopOta";
+    case DIAG_STAGE_TEMP_SENSORS: return "loopTempSensors";
+    case DIAG_STAGE_SCHEDULE:     return "loopSchedule";
+    case DIAG_STAGE_DATALOG:      return "datalogLoop";
+    case DIAG_STAGE_WEBSERVER:    return "webServerLoop";
+    case DIAG_STAGE_DIAGLOG:      return "diaglogLoop";
+    case DIAG_STAGE_BROADCAST:    return "broadcastState";
+    case DIAG_STAGE_NTP_TIMEOUT:  return "Reinicio por falta de hora NTP";
+    case DIAG_STAGE_NTP_TIMEOUT_NOWIFI: return "Reinicio por falta de hora NTP (sin WiFi estable)";
+    default:                      return "Desconocido";
+  }
+}
+
+const char* diaglogResetReasonText(uint8_t reason) {
+  switch ((esp_reset_reason_t)reason) {
+    case ESP_RST_POWERON:   return "Encendido normal";
+    case ESP_RST_EXT:       return "Reset externo (pin RESET)";
+    case ESP_RST_SW:        return "Reinicio por software (ESP.restart)";
+    case ESP_RST_PANIC:     return "PANIC (excepcion/crash del firmware)";
+    case ESP_RST_INT_WDT:   return "Watchdog interno (interrupcion bloqueada)";
+    case ESP_RST_TASK_WDT:  return "Watchdog de tarea (loop/tarea colgada)";
+    case ESP_RST_WDT:       return "Otro watchdog";
+    case ESP_RST_DEEPSLEEP: return "Salida de deep sleep";
+    case ESP_RST_BROWNOUT:  return "Brownout (caida de tension)";
+    case ESP_RST_SDIO:      return "Reset via SDIO";
+    default:                return "Desconocido";
+  }
+}
+
+uint8_t diaglogEventClass(uint8_t reason, uint8_t breadcrumb) {
+  switch ((esp_reset_reason_t)reason) {
+    case ESP_RST_UNKNOWN: return 0; // muestra periodica (no de arranque): no es un evento
+    case ESP_RST_POWERON: return 0;
+    case ESP_RST_EXT:
+    case ESP_RST_SDIO:    return 2;
+    case ESP_RST_SW:
+      return (breadcrumb == DIAG_STAGE_NTP_TIMEOUT || breadcrumb == DIAG_STAGE_NTP_TIMEOUT_NOWIFI) ? 1 : 2;
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT:
+      return 3;
+    default: return 3; // codigo desconocido: mejor tratarlo como anomalo que ignorarlo
+  }
+}
+
+// ---------------- JSON (compartido entre servidor remoto y fallback local) ----------------
+
+// Construye el JSON de una muestra en el MISMO formato/orden de campos
+// que devolvia el antiguo /api/diag local, para que diagpage.cpp no
+// necesite ningun cambio:
+// [ts,freeHeap,minFreeHeap,maxAllocHeap,uptimeSec,maxLoopMicros,
+//   minStackBytes,rssi,wsClients,wifiConnected,resetReason,
+//   resetReasonTexto,breadcrumb(texto),wifiReconnects,ntcErrors,eventClass]
+static void appendEntryJson(String &out, const DiagEntry &e) {
+  bool esEvento = (e.resetReason && e.resetReason != 1);
+  out += '[';
+  out += e.timestamp;      out += ',';
+  out += e.freeHeap;       out += ',';
+  out += e.minFreeHeap;    out += ',';
+  out += e.maxAllocHeap;   out += ',';
+  out += e.uptimeSec;      out += ',';
+  out += e.maxLoopMicros;  out += ',';
+  out += e.minStackBytes;  out += ',';
+  out += e.rssi;           out += ',';
+  out += e.wsClients;      out += ',';
+  out += e.wifiConnected;  out += ',';
+  out += e.resetReason;    out += ',';
+  out += '"'; out += esEvento ? diaglogResetReasonText(e.resetReason) : ""; out += '"'; out += ',';
+  out += '"'; out += esEvento ? diaglogStageText(e.breadcrumb) : ""; out += '"'; out += ',';
+  out += e.wifiReconnects; out += ',';
+  out += e.ntcErrors;      out += ',';
+  out += diaglogEventClass(e.resetReason, e.breadcrumb);
+  out += ']';
+}
+
+static String fallbackToJson() {
+  xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+  int n = g_fbCount;
+  String out;
+  out.reserve(n * 100 + 32);
+  out += "{\"intervalMs\":";
+  out += g_intervalMs;
+  out += ",\"samples\":[";
+  for (int i = 0; i < n; i++) {
+    int physical = (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) ? i : (g_fbHead + i) % DIAG_LOG_CAPACITY_ENTRIES;
+    if (i > 0) out += ',';
+    appendEntryJson(out, g_fallback[physical]);
+  }
+  out += "]}";
+  xSemaphoreGive(g_fbMutex);
+  return out;
+}
+
+// ---------------- Comunicacion HTTP con el servidor remoto ----------------
+
+// Envia una muestra de diagnostico al servidor (/api/diag). Igual que en
+// datalog.cpp: timeout corto, bloqueante pero SOLO dentro de la tarea
+// dedicada, nunca desde el loop() principal.
+static bool sendDiagHttp(const DiagEntry &e) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  http.setTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+  if (!http.begin(String(REMOTE_LOG_SERVER_URL) + "/api/diag")) return false;
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-API-Key", REMOTE_LOG_API_KEY);
+
+  bool esEvento = (e.resetReason && e.resetReason != 1);
+  String body;
+  body.reserve(220);
+  body += "{\"ts\":"; body += e.timestamp;
+  body += ",\"freeHeap\":"; body += e.freeHeap;
+  body += ",\"minFreeHeap\":"; body += e.minFreeHeap;
+  body += ",\"maxAllocHeap\":"; body += e.maxAllocHeap;
+  body += ",\"uptimeSec\":"; body += e.uptimeSec;
+  body += ",\"maxLoopMicros\":"; body += e.maxLoopMicros;
+  body += ",\"minStackBytes\":"; body += e.minStackBytes;
+  body += ",\"rssi\":"; body += e.rssi;
+  body += ",\"wsClients\":"; body += e.wsClients;
+  body += ",\"wifiConnected\":"; body += e.wifiConnected;
+  body += ",\"resetReason\":"; body += e.resetReason;
+  body += ",\"resetReasonText\":\""; body += (esEvento ? diaglogResetReasonText(e.resetReason) : ""); body += '"';
+  body += ",\"breadcrumbText\":\""; body += (esEvento ? diaglogStageText(e.breadcrumb) : ""); body += '"';
+  body += ",\"wifiReconnects\":"; body += e.wifiReconnects;
+  body += ",\"ntcErrors\":"; body += e.ntcErrors;
+  body += ",\"eventClass\":"; body += diaglogEventClass(e.resetReason, e.breadcrumb);
+  body += '}';
+
+  int code = http.POST(body);
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+static void remoteDiagTask(void *pv) {
+  DiagEntry e;
+  for (;;) {
+    if (xQueueReceive(g_sendQueue, &e, portMAX_DELAY) != pdTRUE) continue;
+
+    // Igual que en datalog.cpp: si hay backlog de emergencia, se intenta
+    // primero en orden cronologico antes que la muestra recien encolada.
+    xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+    int backlog = g_fbCount;
+    xSemaphoreGive(g_fbMutex);
+
+    if (backlog > 0) {
+      xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+      int physical = (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) ? 0 : g_fbHead;
+      DiagEntry oldest = g_fallback[physical];
+      xSemaphoreGive(g_fbMutex);
+
+      if (sendDiagHttp(oldest)) {
+        xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+        g_fbCount--;
+        xSemaphoreGive(g_fbMutex);
+      } else {
+        fallbackPush(e);
+        continue;
+      }
+    }
+
+    if (!sendDiagHttp(e)) {
+      fallbackPush(e);
+    }
+  }
+}
+
+// ---------------- API publica ----------------
+
 static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
                       uint16_t wifiReconnects, uint16_t ntcErrors) {
   DiagEntry e;
@@ -73,55 +270,32 @@ static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
   e.wifiReconnects  = wifiReconnects;
   e.ntcErrors       = ntcErrors;
 
-  g_diag[g_head] = e;
-
-  // Mismo motivo que en datalog.cpp: hay que persistir DESPUES de avanzar
-  // g_head/g_count, o el checkpoint guardado en NVS queda siempre 1
-  // muestra por detras y cada reinicio pisa la ultima ya guardada.
-  uint16_t writtenAt = g_head;
-  g_head = (g_head + 1) % DIAG_LOG_CAPACITY_ENTRIES;
-  if (g_count < DIAG_LOG_CAPACITY_ENTRIES) g_count++;
-
-  persistChunk(writtenAt);
+  if (xQueueSend(g_sendQueue, &e, 0) != pdTRUE) {
+    Serial.println("[DIAG] Cola de envio llena, muestra descartada");
+  }
 
   g_lastSampleMillis = millis();
   g_maxLoopMicros = 0; // arranca de cero para medir el siguiente periodo
 }
 
 void diaglogInit() {
+  g_fbMutex = xSemaphoreCreateMutex();
+  g_sendQueue = xQueueCreate(REMOTE_LOG_QUEUE_LEN, sizeof(DiagEntry));
+  xTaskCreatePinnedToCore(remoteDiagTask, "remoteDiagTask", 4096, nullptr, 1, nullptr, 0);
+
+  // El intervalo de muestreo es lo UNICO que se sigue guardando en NVS:
+  // es un ajuste (4 bytes), no el historico completo.
   prefsDiag.begin("diaglog", true);
-  g_head  = prefsDiag.getUShort("head", 0);
-  g_count = prefsDiag.getUShort("count", 0);
-  // Proteccion: si DIAG_LOG_CAPACITY cambio desde la ultima vez que se
-  // guardo (como paso al reducirla de 400 a 200, ver config.h), head/count
-  // guardados en NVS pueden apuntar fuera del array g_diag actual. Sin este
-  // chequeo, "g_diag[g_head] = e" en addEntry() seria un acceso fuera de
-  // rango (memoria corrupta), y ademas diaglogToJson() mostraria muestras
-  // "fantasma" nunca escritas con la capacidad nueva (heap 0, sin hora, tal
-  // como se vio en el historico real). Ante la duda, se descarta el
-  // historico incompatible y se empieza de cero.
-  if (g_head >= DIAG_LOG_CAPACITY_ENTRIES || g_count > DIAG_LOG_CAPACITY_ENTRIES) {
-    Serial.println("[DIAG] head/count de NVS incompatibles con la capacidad actual, reiniciando historico.");
-    g_head = 0;
-    g_count = 0;
-  }
   g_intervalMs = prefsDiag.getUInt("intervalMs", DIAG_SAMPLE_INTERVAL_MS);
-  for (int chunk = 0; chunk < DIAG_NUM_CHUNKS; chunk++) {
-    String key = "c" + String(chunk);
-    size_t expected = DIAG_CHUNK_ENTRIES * sizeof(DiagEntry);
-    size_t got = prefsDiag.getBytes(key.c_str(), &g_diag[chunk * DIAG_CHUNK_ENTRIES], expected);
-    if (got != expected) {
-      memset(&g_diag[chunk * DIAG_CHUNK_ENTRIES], 0, expected);
-    }
-  }
   prefsDiag.end();
-  Serial.printf("[DIAG] Historico de diagnostico cargado: %u muestras\n", g_count);
+
+  Serial.println("[DIAG] Cliente del servidor remoto inicializado");
 
   // Registro inmediato del arranque, con el motivo del ultimo reset. Esto
   // es lo mas importante para investigar cuelgues: si el reset fue por
   // watchdog (RTCWDT/TASK_WDT), panic, brownout, etc., queda constancia
-  // aunque el timestamp aun no este sincronizado por NTP (saldra 0 y se
-  // podra situar por uptime/orden en la lista).
+  // aunque el timestamp aun no este sincronizado por NTP (saldra 0) ni
+  // haya WiFi todavia (se encola y se envia en cuanto lo haya).
   esp_reset_reason_t reason = esp_reset_reason();
   Serial.printf("[DIAG] Motivo del ultimo arranque: %s\n", diaglogResetReasonText((uint8_t)reason));
 
@@ -173,122 +347,39 @@ void diaglogSetStage(uint8_t stage) {
   g_rtcStage = stage;
 }
 
-const char* diaglogStageText(uint8_t stage) {
-  switch ((DiagStage)stage) {
-    case DIAG_STAGE_BOOT:         return "Arranque";
-    case DIAG_STAGE_LOOP_WIFI:    return "loopWifi";
-    case DIAG_STAGE_OTA:          return "loopOta";
-    case DIAG_STAGE_TEMP_SENSORS: return "loopTempSensors";
-    case DIAG_STAGE_SCHEDULE:     return "loopSchedule";
-    case DIAG_STAGE_DATALOG:      return "datalogLoop";
-    case DIAG_STAGE_WEBSERVER:    return "webServerLoop";
-    case DIAG_STAGE_DIAGLOG:      return "diaglogLoop";
-    case DIAG_STAGE_BROADCAST:    return "broadcastState";
-    case DIAG_STAGE_NTP_TIMEOUT:  return "Reinicio por falta de hora NTP";
-    case DIAG_STAGE_NTP_TIMEOUT_NOWIFI: return "Reinicio por falta de hora NTP (sin WiFi estable)";
-    default:                      return "Desconocido";
-  }
-}
-
-int diaglogCount() {
-  return g_count;
-}
-
-// Borra todo el historico: resetea cabecera y buffer en RAM, y limpia
-// por completo el namespace NVS "diaglog" (mas simple y fiable que
-// regrabar cada chunk a cero).
-void diaglogClear() {
-  g_head  = 0;
-  g_count = 0;
-  memset(g_diag, 0, sizeof(g_diag));
-
-  prefsDiag.begin("diaglog", false);
-  prefsDiag.clear();
-  prefsDiag.end();
-
-  Serial.println("[DIAG] Historico de diagnostico borrado");
-}
-
-DiagEntry diaglogGet(int index) {
-  int physical;
-  if (g_count < DIAG_LOG_CAPACITY_ENTRIES) {
-    physical = index;
-  } else {
-    physical = (g_head + index) % DIAG_LOG_CAPACITY_ENTRIES;
-  }
-  return g_diag[physical];
-}
-
-// Indices del array por muestra (deben coincidir con diagpage.cpp):
-// 0 timestamp, 1 freeHeap, 2 minFreeHeap, 3 maxAllocHeap, 4 uptimeSec,
-// 5 maxLoopMicros, 6 minStackBytes, 7 rssi, 8 wsClients, 9 wifiConnected,
-// 10 resetReason, 11 resetReasonTexto, 12 breadcrumb(texto),
-// 13 wifiReconnects, 14 ntcErrors, 15 eventClass (0 normal, 1 deliberado,
-// 2 externo, 3 anomalo; ver diaglogEventClass)
 String diaglogToJson() {
-  int n = diaglogCount();
-  String out;
-  out.reserve(n * 100 + 32);
-  out += "{\"intervalMs\":";
-  out += diaglogGetIntervalMs();
-  out += ",\"samples\":[";
-  for (int i = 0; i < n; i++) {
-    DiagEntry e = diaglogGet(i);
-    bool esEvento = (e.resetReason && e.resetReason != 1);
-    if (i > 0) out += ',';
-    out += '[';
-    out += e.timestamp;      out += ',';
-    out += e.freeHeap;       out += ',';
-    out += e.minFreeHeap;    out += ',';
-    out += e.maxAllocHeap;   out += ',';
-    out += e.uptimeSec;      out += ',';
-    out += e.maxLoopMicros;  out += ',';
-    out += e.minStackBytes;  out += ',';
-    out += e.rssi;           out += ',';
-    out += e.wsClients;      out += ',';
-    out += e.wifiConnected;  out += ',';
-    out += e.resetReason;    out += ',';
-    out += '"'; out += esEvento ? diaglogResetReasonText(e.resetReason) : ""; out += '"'; out += ',';
-    out += '"'; out += esEvento ? diaglogStageText(e.breadcrumb) : ""; out += '"'; out += ',';
-    out += e.wifiReconnects; out += ',';
-    out += e.ntcErrors;      out += ',';
-    out += diaglogEventClass(e.resetReason, e.breadcrumb);
-    out += ']';
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.setTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+    http.setConnectTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+    if (http.begin(String(REMOTE_LOG_SERVER_URL) + "/api/diag")) {
+      int code = http.GET();
+      if (code == 200) {
+        String body = http.getString();
+        http.end();
+        return body;
+      }
+      http.end();
+    }
   }
-  out += "]}";
-  return out;
+  Serial.println("[DIAG] /api/diag remoto no disponible, sirviendo buffer local");
+  return fallbackToJson();
 }
 
-uint8_t diaglogEventClass(uint8_t reason, uint8_t breadcrumb) {
-  switch ((esp_reset_reason_t)reason) {
-    case ESP_RST_UNKNOWN: return 0; // muestra periodica (no de arranque): no es un evento
-    case ESP_RST_POWERON: return 0;
-    case ESP_RST_EXT:
-    case ESP_RST_SDIO:    return 2;
-    case ESP_RST_SW:
-      return (breadcrumb == DIAG_STAGE_NTP_TIMEOUT || breadcrumb == DIAG_STAGE_NTP_TIMEOUT_NOWIFI) ? 1 : 2;
-    case ESP_RST_PANIC:
-    case ESP_RST_INT_WDT:
-    case ESP_RST_TASK_WDT:
-    case ESP_RST_WDT:
-    case ESP_RST_BROWNOUT:
-      return 3;
-    default: return 3; // codigo desconocido: mejor tratarlo como anomalo que ignorarlo
-  }
-}
+void diaglogClear() {
+  fallbackClear();
 
-const char* diaglogResetReasonText(uint8_t reason) {
-  switch ((esp_reset_reason_t)reason) {
-    case ESP_RST_POWERON:   return "Encendido normal";
-    case ESP_RST_EXT:       return "Reset externo (pin RESET)";
-    case ESP_RST_SW:        return "Reinicio por software (ESP.restart)";
-    case ESP_RST_PANIC:     return "PANIC (excepcion/crash del firmware)";
-    case ESP_RST_INT_WDT:   return "Watchdog interno (interrupcion bloqueada)";
-    case ESP_RST_TASK_WDT:  return "Watchdog de tarea (loop/tarea colgada)";
-    case ESP_RST_WDT:       return "Otro watchdog";
-    case ESP_RST_DEEPSLEEP: return "Salida de deep sleep";
-    case ESP_RST_BROWNOUT:  return "Brownout (caida de tension)";
-    case ESP_RST_SDIO:      return "Reset via SDIO";
-    default:                return "Desconocido";
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[DIAG] Sin WiFi: no se puede pedir el borrado al servidor remoto");
+    return;
+  }
+  HTTPClient http;
+  http.setTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
+  if (http.begin(String(REMOTE_LOG_SERVER_URL) + "/api/diag/clear")) {
+    http.addHeader("X-API-Key", REMOTE_LOG_API_KEY);
+    int code = http.POST("");
+    http.end();
+    Serial.printf("[DIAG] Borrado remoto -> HTTP %d\n", code);
   }
 }

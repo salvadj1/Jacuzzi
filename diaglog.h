@@ -8,11 +8,21 @@
  * el historico desde la pagina web en vez de tener que estar delante
  * del Monitor Serie en el momento exacto en que ocurre el problema.
  *
- * Guarda una muestra cada DIAG_SAMPLE_INTERVAL_MS y ademas registra un
+ * Guarda una muestra cada intervalo configurable y ademas registra un
  * evento inmediato en el arranque (con el motivo del ultimo reset).
  *
- * Almacenamiento: buffer circular en RAM, respaldado en NVS por trozos,
- * igual que datalog.cpp (mismo patron, namespace NVS distinto).
+ * MIGRACION: al igual que datalog.cpp, el historico de estas muestras ya
+ * NO se guarda en el ESP32 (antes: buffer circular en RAM + NVS). Ahora
+ * se envia por HTTP al mismo servidor Python que el datalog (ver
+ * jacuzzi_server/), a los endpoints /api/diag. Libera toda la RAM/NVS
+ * que antes ocupaba este buffer (200 x 32 bytes = 6,4 KB) y ya no limita
+ * el historico a ~16-17 horas.
+ *
+ * IMPORTANTE: lo unico que SIGUE siendo local (y debe seguir siendolo) es
+ * el breadcrumb de memoria RTC (diaglogSetStage) y el pico de duracion de
+ * loop() (diaglogRecordLoopDuration): si el ESP32 se cuelga, el propio
+ * mecanismo que registra el motivo del cuelgue no puede depender de que
+ * la red/el servidor esten disponibles en ese instante.
  *
  * Reutilizable: no depende de nada especifico del jacuzzi salvo de leer
  * el numero de clientes WebSocket conectados (se le pasa por parametro
@@ -78,12 +88,16 @@ void diaglogSetStage(uint8_t stage);
 // Texto legible de una zona (para mostrar el breadcrumb en la web).
 const char* diaglogStageText(uint8_t stage);
 
-// Capacidad total del buffer circular.
-#define DIAG_LOG_CAPACITY_ENTRIES DIAG_LOG_CAPACITY
+// Capacidad del buffer LOCAL de emergencia (no del historico completo,
+// que ahora vive en el servidor remoto sin limite practico). Ver
+// REMOTE_DIAG_FALLBACK_CAPACITY en config.h.
+#define DIAG_LOG_CAPACITY_ENTRIES REMOTE_DIAG_FALLBACK_CAPACITY
 
-// Inicializa el modulo: carga el buffer guardado en NVS y registra un
-// evento inmediato con el motivo del ultimo arranque. Llamar una vez en
-// setup(), antes o despues de datalogInit() (son independientes).
+// Inicializa el modulo: recupera el intervalo de muestreo guardado (NVS,
+// pequeño, no relacionado con el historico) y registra un evento
+// inmediato con el motivo del ultimo arranque (se encola para enviar al
+// servidor remoto en cuanto haya WiFi). Llamar una vez en setup(),
+// despues de datalogInit() (comparten el mismo mecanismo de cola/tarea).
 void diaglogInit();
 
 // Logica periodica: añade una muestra si ha pasado el intervalo
@@ -104,20 +118,14 @@ void diaglogLoop(uint8_t wsClients, uint16_t wifiReconnects, uint16_t ntcErrors)
 // micros() al principio y al final de loop().
 void diaglogRecordLoopDuration(uint32_t micros_duration);
 
-// Numero de muestras validas actualmente en el buffer.
-int diaglogCount();
-
-// Borra todo el historico (RAM + NVS). Deja el buffer como recien
-// arrancado (head=count=0); no borra la muestra de arranque actual, asi
-// que tras borrar puede volver a crecer con la siguiente diaglogLoop().
-void diaglogClear();
-
-// Devuelve la muestra "index" en orden cronologico (0 = la mas antigua).
-DiagEntry diaglogGet(int index);
-
-// Construye el JSON de respuesta para el endpoint /api/diag con todas
-// las muestras disponibles.
+// Construye el JSON de respuesta para el endpoint /api/diag con las
+// muestras disponibles. A partir de la migracion, se obtiene por HTTP
+// del servidor remoto (o del buffer local de emergencia si no responde).
 String diaglogToJson();
+
+// Pide al servidor remoto borrar TODO el historico de diagnostico, y
+// limpia tambien el buffer local de emergencia.
+void diaglogClear();
 
 // Texto legible del motivo de reset (para mostrar en la web sin tener
 // que traducir el codigo numerico en el navegador).

@@ -3,20 +3,27 @@
  * -----------------------------------------------------------------------
  * Modulo de registro historico para la grafica de "DATOS".
  *
- * Guarda una muestra cada LOG_SAMPLE_INTERVAL_MS (temperaturas + estado)
- * y ademas registra al instante cualquier cambio de estado (bomba, modo
- * auto, valvulas, forzado manual), para no perder esos eventos entre
- * dos muestras periodicas.
+ * MIGRACION: este modulo ya NO guarda el historico en el propio ESP32
+ * (antes: buffer circular en RAM + respaldo en NVS por chunks). Ahora
+ * actua como CLIENTE de un servidor Python (FastAPI + SQLite) que corre
+ * 24/7 en un PC de la misma red local (ver jacuzzi_server/ en la raiz del
+ * repo y REMOTE_LOG_* en config.h).
  *
- * Almacenamiento: buffer circular en RAM, respaldado en NVS (Preferences)
- * en varios trozos (chunks) para no superar el limite de tamaño de una
- * entrada NVS. Con muestras cada 15 min, la capacidad configurada cubre
- * 7 dias completos de sobra, incluso contando eventos extra.
+ * - addEntry() ya no escribe en NVS: encola la muestra y una tarea aparte
+ *   la envia por HTTP POST a {REMOTE_LOG_SERVER_URL}/api/data, sin
+ *   bloquear el loop() principal (control de reles/sensores).
+ * - datalogToJson() hace un HTTP GET a {REMOTE_LOG_SERVER_URL}/api/history
+ *   y devuelve la respuesta tal cual (mismo formato JSON que antes, asi
+ *   que la pagina "/datos" no necesita cambios).
+ * - datalogDeleteRange()/datalogFormat() reenvian la orden al servidor.
+ * - Si el servidor no responde (PC apagado, red caida), las muestras no
+ *   enviadas se guardan en un pequeño buffer de emergencia en RAM
+ *   (REMOTE_LOG_FALLBACK_CAPACITY, ver datalog.cpp) y se reintentan mas
+ *   tarde; las consultas ese rato se sirven desde ese mismo buffer.
  *
- * Reutilizable: este modulo no depende de nada especifico del jacuzzi
- * salvo de "leer" temperaturas/estado desde g_state; para otro proyecto
- * bastaria con adaptar datalogSampleNow() a los datos que se quieran
- * registrar.
+ * Sigue guardando una muestra cada LOG_SAMPLE_INTERVAL_MS (temperaturas +
+ * estado) y ademas registra al instante cualquier cambio de estado
+ * (bomba, modo auto, valvulas, forzado manual), igual que antes.
  * -----------------------------------------------------------------------
  */
 #pragma once
@@ -28,7 +35,9 @@
 #define LOG_FLAG_VALVES      (1 << 2) // Valvulas desviadas a solar (true) / filtro (false)
 #define LOG_FLAG_FORCE_SOLAR (1 << 3) // Selector manual en posicion solar
 
-// Una muestra del historico (9 bytes, sin padding gracias a "packed")
+// Una muestra del historico (9 bytes, sin padding gracias a "packed").
+// Mismo formato que usa el servidor Python (ver jacuzzi_server/main.py) y
+// el JSON de /api/history, para no tener que traducir nada por el camino.
 struct __attribute__((packed)) LogEntry {
   uint32_t timestamp;   // Epoch (segundos), 0 = entrada vacia/no usada
   int16_t  tJacuzziX10; // Temperatura T1 x10 (1 decimal), ej. 314 = 31.4 C
@@ -36,52 +45,25 @@ struct __attribute__((packed)) LogEntry {
   uint8_t  flags;       // Combinacion de LOG_FLAG_*
 };
 
-// Capacidad total del buffer circular. A 15 min/muestra cubre ~10.4 dias
-// solo con muestreo periodico, dejando margen para las muestras extra
-// que se añaden en cada evento (se van descartando las mas antiguas).
-#define LOG_CAPACITY 1000
-
-// Cada cuantas muestras nuevas (en RAM) se vuelca el buffer a NVS.
-// Antes se escribia en flash en CADA muestra (cada 15 min o en cada
-// cambio de estado); esa escritura bloqueante en NVS era la causa
-// confirmada de resets por watchdog/panic dentro de datalogLoop (ver
-// diagnostico /diag, breadcrumb "datalogLoop"). Con este valor se reduce
-// la frecuencia de escritura a costa de poder perder, como mucho, las
-// ultimas (DATALOG_PERSIST_EVERY_N - 1) muestras si hay un corte de luz
-// justo antes del proximo volcado.
-#define DATALOG_PERSIST_EVERY_N 4
-
-// Inicializa el modulo: carga el buffer guardado en NVS (si existe).
-// Llamar una vez en setup(), despues de storageInit().
+// Inicializa el modulo: prepara la cola/tarea de envio HTTP en segundo
+// plano. Llamar una vez en setup(), despues de storageInit().
 void datalogInit();
 
 // Logica periodica: comprueba si toca muestra por tiempo (15 min) o si
 // algun estado ha cambiado desde la ultima muestra registrada, y en tal
-// caso añade una nueva entrada. Llamar en cada vuelta del loop().
+// caso encola una nueva entrada para enviar al servidor. No bloquea.
+// Llamar en cada vuelta del loop().
 void datalogLoop();
 
-// Numero de muestras validas actualmente en el buffer (<= LOG_CAPACITY).
-int datalogCount();
-
-// Devuelve la muestra "index" en orden cronologico (0 = la mas antigua
-// disponible, datalogCount()-1 = la mas reciente).
-LogEntry datalogGet(int index);
-
-// Construye el JSON de respuesta para el endpoint /api/history con todas
-// las muestras disponibles (hasta 7 dias). Pensado para escribirse
-// directamente en la respuesta HTTP (evita construir una String gigante
-// en memoria).
+// Construye (via HTTP GET al servidor, con fallback local si no responde)
+// el JSON de respuesta para el endpoint /api/history con las muestras
+// disponibles. Formato: {"samples":[[ts,t1,t2,flags], ...]}.
 String datalogToJson();
 
-// Borra todas las muestras cuyo timestamp cae en [fromTs, toTs) (pensado
-// para borrar un dia completo desde la web, boton por dia en "/datos") y
-// compacta el resto. Operacion puntual bajo demanda -no se llama desde
-// el loop()-, reescribe el historico completo en NVS.
+// Pide al servidor borrar las muestras cuyo timestamp cae en
+// [fromTs, toTs) (boton "borrar dia" en la web).
 void datalogDeleteRange(uint32_t fromTs, uint32_t toTs);
 
-// Borra TODO el historico (buffer en RAM + namespace NVS completo) y
-// vuelve a dejarlo como recien arrancado por primera vez. Pensado como
-// opcion de ultimo recurso ("FORMATEAR DATOS") para cuando algun dia
-// concreto no se puede borrar por datos corruptos que datalogDeleteRange
-// no consigue identificar/compactar bien.
+// Pide al servidor borrar TODO el historico y limpia el buffer local de
+// emergencia. Opcion de ultimo recurso ("FORMATEAR" en /diag y /datos).
 void datalogFormat();

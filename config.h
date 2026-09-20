@@ -86,6 +86,25 @@
 #define AP_CONFIG_WINDOW_MS (5UL * 60UL * 1000UL)  // AP de configuracion abierto 5 min en cada arranque
 #define LOG_SAMPLE_INTERVAL_MS (15UL * 60UL * 1000UL) // Cada cuanto se registra una muestra periodica en el historico
 
+// ---------------- Servidor remoto de historico (PC local, ver datalog.cpp) ----------------
+// A partir de esta migracion, el historico de temperaturas/estado ya NO se
+// guarda en el propio ESP32 (RAM/NVS): se envia por HTTP a un servidor
+// Python (FastAPI + SQLite) corriendo 24/7 en un PC de la misma red local.
+// Ajusta REMOTE_LOG_SERVER_URL a la IP (o nombre mDNS, ej. "jacuzzi-server.local")
+// y puerto donde arranque ese servidor (ver jacuzzi_server/README.md).
+#define REMOTE_LOG_SERVER_URL      "http://192.168.1.11:8000" // <-- AJUSTAR a la IP real del PC
+#define REMOTE_LOG_API_KEY         "7fK9xQ2mV8rL4zN6pT3wY5sH1cJ0dB4a"        // debe coincidir con API_KEY del servidor
+#define REMOTE_LOG_HTTP_TIMEOUT_MS 1500  // timeout corto: si el PC no responde, no bloquear el firmware
+#define REMOTE_LOG_QUEUE_LEN       20    // muestras en cola pendientes de enviar (RAM, no persistente)
+#define REMOTE_LOG_FALLBACK_CAPACITY 100 // respaldo en RAM si el PC no responde (ver datalog.cpp)
+
+// El diaglog (salud del sistema) usa el MISMO servidor/API key que el
+// datalog de arriba, solo cambian los endpoints (/api/diag en vez de
+// /api/data, ver diaglog.cpp). Buffer de emergencia mas pequeño porque
+// una muestra cada 5 min (por defecto) necesita mucho menos colchon que
+// el datalog para cubrir un corte puntual del servidor.
+#define REMOTE_DIAG_FALLBACK_CAPACITY 30
+
 // ---------------- Watchdog software ----------------
 // Si el loop() se queda colgado (por ejemplo, por un fallo en una
 // libreria de red) y no se "alimenta" el watchdog en este tiempo, el
@@ -117,11 +136,9 @@
 // ---------------- Registro de diagnostico (para investigar cuelgues) ----------------
 // Guarda periodicamente heap libre, clientes WebSocket, estado WiFi, etc.
 // para poder revisar que paso si el sistema se queda "colgado" otra vez.
+// Desde la migracion al servidor remoto (ver diaglog.cpp), el historico
+// completo ya NO tiene limite de capacidad en el ESP32: el antiguo
+// DIAG_LOG_CAPACITY (buffer NVS de 200 entradas / ~16-17h) se elimina.
+// El unico tamaño que queda en el ESP32 es el buffer de emergencia
+// REMOTE_DIAG_FALLBACK_CAPACITY, mas abajo (junto a REMOTE_LOG_*).
 #define DIAG_SAMPLE_INTERVAL_MS (5UL * 60UL * 1000UL) // una muestra cada 5 min
-#define DIAG_LOG_CAPACITY   200 // a 5 min/muestra cubre unas 16-17h; reducido de 400 (33h) porque
-                                 // cada muestra ocupa 37 bytes y NVS trocea los blobs en paginas de
-                                 // 32 bytes: con 400 muestras diaglog solo ya se comia ~470 de las
-                                 // ~630 entradas NVS disponibles, dejando casi sin margen a "leds"
-                                 // y demas modulos (causaba fallos silenciosos al guardar color/
-                                 // brillo/power). Debe seguir siendo multiplo de DIAG_CHUNK_ENTRIES
-                                 // (50, en diaglog.cpp) para que el troceado en chunks cuadre.
