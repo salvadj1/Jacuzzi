@@ -343,50 +343,349 @@ def clear_diag(x_api_key: Optional[str] = Header(default=None)):
     return {"ok": True}
 
 
+# ---------------- Esquema dinamico (para que la web no dependa de columnas fijas) ----------------
+
+# Tablas que el panel de administracion puede listar. Si en el futuro se
+# anade una tabla nueva (por ejemplo, otro sensor), basta con incluirla
+# aqui: el HTML/JS del panel la detecta sola via /api/schema, sin tocar
+# ni una linea de esta seccion ni del frontend.
+ADMIN_TABLES = ["samples", "diag_samples"]
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    """Nombres de columna reales de una tabla, en el orden de la tabla."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [r[1] for r in rows]
+
+
+@app.get("/api/schema")
+def get_schema():
+    """Devuelve, para cada tabla del panel, sus columnas y cuantas de ellas
+    son numericas (para que el frontend decida solo que pintar como
+    tarjeta/grafica y que pintar como tabla). No requiere API key: es
+    metadata, no datos, y la sirve el mismo servidor de solo lectura."""
+    with get_db() as conn:
+        tablas = {}
+        for tabla in ADMIN_TABLES:
+            cols = conn.execute(f"PRAGMA table_info({tabla})").fetchall()
+            tablas[tabla] = [
+                {"nombre": c[1], "tipo": c[2], "es_pk": bool(c[5])}
+                for c in cols
+            ]
+    return JSONResponse({"tablas": tablas})
+
+
+@app.get("/api/table/{tabla}")
+def get_table_rows(
+    tabla: str,
+    limite: int = Query(default=200, le=2000),
+    desde: Optional[int] = Query(default=None, description="epoch segundos, columna ts, inclusive"),
+    hasta: Optional[int] = Query(default=None, description="epoch segundos, columna ts, exclusive"),
+):
+    """Endpoint generico de solo lectura: devuelve filas de cualquier tabla
+    del panel (samples o diag_samples) junto con sus columnas, sin que el
+    codigo tenga que conocer los nombres de campo de antemano. Esto es lo
+    que permite que, si un dia se anaden columnas nuevas a una tabla, el
+    panel las muestre sin cambios en este archivo ni en el frontend."""
+    if tabla not in ADMIN_TABLES:
+        raise HTTPException(status_code=404, detail="tabla no reconocida")
+
+    with get_db() as conn:
+        columnas = _table_columns(conn, tabla)
+        if hasta is None:
+            hasta = int(time.time()) + 1
+        if desde is None:
+            desde = 0
+        rows = conn.execute(
+            f"SELECT * FROM {tabla} WHERE ts >= ? AND ts < ? ORDER BY ts DESC LIMIT ?",
+            (desde, hasta, limite),
+        ).fetchall()
+
+    return JSONResponse({"columnas": columnas, "filas": [list(r) for r in rows]})
+
+
 # ---------------- Panel de administracion (solo lectura, uso propio) ----------------
 
 @app.get("/", response_class=HTMLResponse)
 def admin_page():
-    """Pagina HTML minima para consultar los datos crudos desde el PC
-    (o desde fuera via Tailscale Funnel). No es el panel de control del
+    """Panel HTML de solo lectura para consultar los datos crudos desde el
+    PC (o desde fuera via Tailscale Funnel). No es el panel de control del
     jacuzzi -eso lo sigue sirviendo el ESP32-, es solo para inspeccionar
-    lo que hay guardado."""
-    with get_db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
-        total_diag = conn.execute("SELECT COUNT(*) FROM diag_samples").fetchone()[0]
-        ultimas = conn.execute(
-            "SELECT ts, t1, t2, flags FROM samples ORDER BY ts DESC LIMIT 50"
-        ).fetchall()
+    lo que hay guardado.
 
-    filas = "".join(
-        f"<tr><td>{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r[0]))}</td>"
-        f"<td>{r[1]:.1f}</td><td>{r[2]:.1f}</td><td>{r[3]}</td></tr>"
-        for r in ultimas
-    )
-    return f"""
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <title>Jacuzzi - Admin datos</title>
-      <style>
-        body {{ font-family: sans-serif; background:#111; color:#eee; padding:20px; }}
-        table {{ border-collapse: collapse; width:100%; max-width:700px; }}
-        td, th {{ border:1px solid #333; padding:6px 10px; text-align:left; }}
-        th {{ background:#222; }}
-      </style>
-    </head>
-    <body>
-      <h1>Jacuzzi - Datos almacenados</h1>
-      <p>Total de muestras guardadas: <b>{total}</b></p>
-      <p>Total de muestras de diagnostico: <b>{total_diag}</b></p>
-      <p>Ultimas 50 muestras:</p>
-      <table>
-        <tr><th>Fecha</th><th>T1 (jacuzzi)</th><th>T2 (solar)</th><th>flags</th></tr>
-        {filas}
-      </table>
-    </body>
-    </html>
-    """
+    A diferencia de la version anterior, este HTML no tiene columnas ni
+    nombres de campo escritos a mano: al cargar pide /api/schema para
+    saber que columnas tiene cada tabla y /api/table/{{tabla}} para los
+    datos, y construye tarjetas + grafica + tabla (o vista de log, si la
+    tabla no tiene columnas numericas suficientes) dinamicamente en JS.
+    Si en el futuro se anade una columna a samples o diag_samples, o una
+    tabla nueva a ADMIN_TABLES, el panel la muestra sola sin tocar este
+    archivo."""
+    return """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jacuzzi - Datos almacenados</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --card: #1f232c; --border: #2a2f3a;
+    --text: #e8e8e8; --muted: #8b93a3; --accent: #3d8bfd;
+    --danger: #e5534b; --warning: #d9a441; --success: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+         margin: 0; padding: 20px; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 18px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+           padding: 20px; margin-top: 12px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tab { padding: 8px 14px; font-size: 13px; color: var(--muted); cursor: pointer;
+         border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .filtros { display: flex; justify-content: space-between; align-items: center;
+             margin-bottom: 14px; gap: 8px; flex-wrap: wrap; }
+  .filtros input, .filtros select { background: var(--card); border: 1px solid var(--border);
+             color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+           gap: 10px; margin-bottom: 14px; }
+  .card { background: var(--card); border-radius: 8px; padding: 10px 12px; }
+  .card .label { font-size: 11px; color: var(--muted); }
+  .card .value { font-size: 18px; font-weight: 500; margin-top: 2px; }
+  .chart-box { background: var(--card); border-radius: 8px; padding: 8px; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: left; border-top: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; border-top: none; }
+  .log-row { display: flex; align-items: center; gap: 10px; background: var(--card);
+             border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.err { background: var(--danger); } .dot.warn { background: var(--warning); }
+  .dot.ok { background: var(--success); } .dot.info { background: var(--muted); }
+  .log-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .muted { color: var(--muted); }
+  button { background: var(--card); border: 1px solid var(--border); color: var(--text);
+           border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  button:hover { background: #262b36; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Jacuzzi - Datos almacenados</h1>
+  <div class="panel">
+    <div class="tabs" id="tabs"></div>
+    <div class="filtros">
+      <div>
+        <input type="date" id="f-desde"> <input type="date" id="f-hasta">
+        <button id="btn-filtrar">Filtrar</button>
+      </div>
+      <button id="btn-exportar">Exportar CSV</button>
+    </div>
+    <div class="cards" id="cards"></div>
+    <div class="chart-box" id="chart-box" style="display:none">
+      <svg id="chart-svg" viewBox="0 0 400 90" style="width:100%;height:90px"></svg>
+    </div>
+    <div id="tabla-o-log"></div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------
+// Panel generico: no conoce de antemano los nombres de columna. Todo se
+// deduce de /api/schema (que columnas tiene cada tabla) y del contenido
+// real de /api/table/{tabla} (que columnas son numericas de verdad, mas
+// alla de su tipo declarado en SQLite).
+// ---------------------------------------------------------------------
+
+let ESQUEMA = null;
+let TABLA_ACTUAL = null;
+
+const COLOR_EVENTO = { err: '#e5534b', warn: '#d9a441', ok: '#3fb950', info: '#8b93a3' };
+
+// Heuristica para decidir el icono/color de una fila de log a partir de
+// las columnas que tenga disponibles (reset_reason, event_class...).
+// Si la tabla no tiene ninguna de estas columnas, siempre cae en "info".
+function claseEvento(fila, columnas) {
+  const idx = (nombre) => columnas.indexOf(nombre);
+  const iReset = idx('reset_reason');
+  const iEvent = idx('event_class');
+  if (iReset > -1 && fila[iReset] && fila[iReset] !== 0) return 'err';
+  if (iEvent > -1) {
+    const v = fila[iEvent];
+    if (v === 2) return 'err';
+    if (v === 1) return 'warn';
+  }
+  return 'ok';
+}
+
+async function cargarEsquema() {
+  const r = await fetch('/api/schema');
+  const data = await r.json();
+  ESQUEMA = data.tablas;
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.innerHTML = '';
+  Object.keys(ESQUEMA).forEach((tabla, i) => {
+    const div = document.createElement('div');
+    div.className = 'tab' + (i === 0 ? ' active' : '');
+    div.textContent = tabla;
+    div.onclick = () => seleccionarTabla(tabla);
+    div.dataset.tabla = tabla;
+    tabsEl.appendChild(div);
+  });
+  const primera = Object.keys(ESQUEMA)[0];
+  if (primera) seleccionarTabla(primera);
+}
+
+function seleccionarTabla(tabla) {
+  TABLA_ACTUAL = tabla;
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tabla === tabla);
+  });
+  cargarDatos();
+}
+
+function fechaFiltro(id) {
+  const v = document.getElementById(id).value;
+  if (!v) return null;
+  return Math.floor(new Date(v + 'T00:00:00').getTime() / 1000);
+}
+
+async function cargarDatos() {
+  if (!TABLA_ACTUAL) return;
+  const desde = fechaFiltro('f-desde');
+  const hasta = fechaFiltro('f-hasta');
+  let url = `/api/table/${TABLA_ACTUAL}?limite=200`;
+  if (desde) url += `&desde=${desde}`;
+  if (hasta) url += `&hasta=${hasta}`;
+  const r = await fetch(url);
+  const data = await r.json();
+  render(data.columnas, data.filas);
+}
+
+// Detecta que columnas son numericas de verdad mirando los valores reales
+// (evita columnas como "flags" o ids que son numeros pero no queremos
+// graficar igual que una temperatura; aun asi se muestran en la tabla).
+function columnasNumericas(columnas, filas) {
+  return columnas.filter((_, i) => {
+    if (columnas[i] === 'ts') return false;
+    return filas.every(f => typeof f[i] === 'number');
+  });
+}
+
+function render(columnas, filas) {
+  renderTarjetas(columnas, filas);
+  renderGrafica(columnas, filas);
+  renderTablaOLog(columnas, filas);
+}
+
+function renderTarjetas(columnas, filas) {
+  const cardsEl = document.getElementById('cards');
+  cardsEl.innerHTML = '';
+  if (!filas.length) return;
+  const ultima = filas[0];
+  const numericas = columnasNumericas(columnas, filas).slice(0, 4);
+  numericas.forEach(nombre => {
+    const i = columnas.indexOf(nombre);
+    const div = document.createElement('div');
+    div.className = 'card';
+    const val = typeof ultima[i] === 'number' ? Math.round(ultima[i] * 10) / 10 : ultima[i];
+    div.innerHTML = `<div class="label">${nombre}</div><div class="value">${val}</div>`;
+    cardsEl.appendChild(div);
+  });
+  const cardTotal = document.createElement('div');
+  cardTotal.className = 'card';
+  cardTotal.innerHTML = `<div class="label">filas mostradas</div><div class="value">${filas.length}</div>`;
+  cardsEl.appendChild(cardTotal);
+}
+
+function renderGrafica(columnas, filas) {
+  const box = document.getElementById('chart-box');
+  const svg = document.getElementById('chart-svg');
+  const numericas = columnasNumericas(columnas, filas).slice(0, 2);
+  if (!numericas.length || filas.length < 2) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  svg.innerHTML = '';
+  const colores = ['#d85a30', '#378add'];
+  const datos = [...filas].reverse();
+  numericas.forEach((nombre, idx) => {
+    const i = columnas.indexOf(nombre);
+    const valores = datos.map(f => f[i]);
+    const min = Math.min(...valores), max = Math.max(...valores) || 1;
+    const puntos = valores.map((v, x) => {
+      const px = (x / (valores.length - 1)) * 400;
+      const py = 85 - ((v - min) / (max - min || 1)) * 80;
+      return `${px.toFixed(1)},${py.toFixed(1)}`;
+    }).join(' ');
+    const linea = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    linea.setAttribute('points', puntos);
+    linea.setAttribute('fill', 'none');
+    linea.setAttribute('stroke', colores[idx % colores.length]);
+    linea.setAttribute('stroke-width', '2');
+    svg.appendChild(linea);
+  });
+}
+
+function renderTablaOLog(columnas, filas) {
+  const cont = document.getElementById('tabla-o-log');
+  const numericas = columnasNumericas(columnas, filas);
+  // Si la tabla tiene columnas de texto tipicas de eventos (breadcrumb,
+  // reset_reason_text...) se muestra como log; si no, como tabla plana.
+  const esLog = columnas.some(c => c.includes('breadcrumb') || c.includes('reset_reason'));
+
+  if (esLog) {
+    cont.innerHTML = '';
+    filas.forEach(fila => {
+      const clase = claseEvento(fila, columnas);
+      const iTs = columnas.indexOf('ts');
+      const fecha = new Date(fila[iTs] * 1000).toLocaleString();
+      const resumen = columnas
+        .filter(c => c !== 'ts')
+        .map((c, idxRel) => `${c}: ${fila[columnas.indexOf(c)]}`)
+        .slice(0, 6).join(' · ');
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      row.innerHTML = `<div class="dot ${clase}"></div>
+        <div><div>${fecha}</div><div class="log-meta">${resumen}</div></div>`;
+      cont.appendChild(row);
+    });
+    if (!filas.length) cont.innerHTML = '<p class="muted">Sin datos en el rango seleccionado.</p>';
+    return;
+  }
+
+  // Tabla plana generica: una columna <th> por cada columna real, sin
+  // nombres hardcodeados.
+  let html = '<table><thead><tr>' + columnas.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+  filas.forEach(fila => {
+    html += '<tr>' + fila.map((v, i) => {
+      if (columnas[i] === 'ts') return `<td>${new Date(v * 1000).toLocaleString()}</td>`;
+      return `<td>${v}</td>`;
+    }).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  if (!filas.length) html = '<p class="muted">Sin datos en el rango seleccionado.</p>';
+  cont.innerHTML = html;
+}
+
+document.getElementById('btn-filtrar').onclick = cargarDatos;
+document.getElementById('btn-exportar').onclick = async () => {
+  const r = await fetch(`/api/table/${TABLA_ACTUAL}?limite=2000`);
+  const data = await r.json();
+  const csv = [data.columnas.join(',')]
+    .concat(data.filas.map(f => f.join(',')))
+    .join('\\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${TABLA_ACTUAL}.csv`;
+  a.click();
+};
+
+cargarEsquema();
+</script>
+</body>
+</html>
+"""
 
 
 @app.get("/api/health")
