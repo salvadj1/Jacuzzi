@@ -22,6 +22,8 @@ ESP32 DevKit/NodeMCU-32S · sin filesystem externo · sin nube · sin dependenci
 - [Calibración y ajustes de temperatura](#calibración-y-ajustes-de-temperatura)
 - [Conexión WiFi: captive portal bajo demanda](#conexión-wifi-captive-portal-bajo-demanda)
 - [Actualización OTA](#actualización-ota)
+- [Histórico remoto: servidor Python](#histórico-remoto-servidor-python)
+- [Control de tiras LED por Bluetooth](#control-de-tiras-led-por-bluetooth)
 - [Páginas web y API](#páginas-web-y-api)
 - [Diagnóstico y salud del sistema](#diagnóstico-y-salud-del-sistema)
 - [Monitor Serie](#monitor-serie-115200-baudios)
@@ -49,11 +51,21 @@ un firmware propio que:
 - Guarda un **histórico de temperaturas** (`/datos`) y un **histórico
   de diagnóstico** (`/diag`) para poder investigar problemas días
   después de que ocurran, sin depender de tener el Monitor Serie
-  abierto en el momento exacto.
+  abierto en el momento exacto. Ambos históricos se envían a un
+  **servidor local en Python** (ver [más abajo](#histórico-remoto-servidor-python)),
+  así que ya no están limitados por la memoria del ESP32.
+- Controla, opcionalmente, **tiras de LED RGB por Bluetooth** (las
+  tiras BLE genéricas tipo "Happy Lighting") con color, efectos y
+  programas horarios propios, desde su propia página `/leds` (ver
+  [más abajo](#control-de-tiras-led-por-bluetooth)).
 
-Todo corre **dentro del propio ESP32**: sin nube, sin apps de terceros,
-sin cuenta que crear. Si tu router se cae, el jacuzzi sigue
-controlándose solo según su programa.
+La lógica de control del jacuzzi (temperaturas, bomba, válvulas,
+programa horario) corre **siempre dentro del propio ESP32**: sin nube,
+sin apps de terceros, sin cuenta que crear. Si tu router se cae, el
+jacuzzi sigue controlándose solo según su programa; lo único que deja
+de funcionar sin red es el envío del histórico al PC y el control de
+las tiras LED (ambos no son necesarios para el funcionamiento del
+jacuzzi en sí).
 
 ## Arquitectura del firmware
 
@@ -63,7 +75,15 @@ El `.ino` **no contiene lógica propia**: solo inicializa y llama a
 `setup()`/`loop()` de cada módulo. Todos los módulos leen y escriben
 sobre un único estado compartido (`g_state`, definido en `data.h`), lo
 que mantiene cada archivo pequeño, independiente y fácil de reutilizar
-en otro proyecto.
+en otro proyecto. La única excepción es `tiras_led.*` (control de LEDs
+por BLE): es completamente autocontenido y no toca `g_state`, para que
+pueda copiarse a otro proyecto sin arrastrar nada del jacuzzi.
+
+Desde la migración del histórico, `datalog.*` y `diaglog.*` ya no
+guardan datos en el propio ESP32: actúan como **cliente HTTP** hacia un
+servidor Python que corre en un PC de la red local (carpeta
+`jacuzzi_server_LOCAL_API_HTML/`). El resto de módulos no lo notan: la
+interfaz pública de `datalog`/`diaglog` no cambió.
 
 ![Lógica de control](logica_control.png)
 
@@ -80,12 +100,14 @@ esp32_jacuzzi/
 ├── temp_sensors.*       -> Lectura de los 2 NTC10k (jacuzzi y solar)
 ├── schedule.*           -> Programa horario + lógica de modo automático
 ├── ota.*                -> Actualización de firmware por WiFi
-├── datalog.*            -> Histórico de temperaturas/eventos (gráfica /datos)
-├── diaglog.*            -> Registro de diagnóstico (heap, wifi, reinicios)
+├── datalog.*            -> Histórico de temperaturas/eventos (envía al servidor Python, gráfica /datos)
+├── diaglog.*            -> Registro de diagnóstico (envía al servidor Python, heap/wifi/reinicios)
+├── tiras_led.*          -> Control de tiras LED RGB por BLE (página /leds, autocontenido)
 ├── web_server.*         -> Servidor web + WebSocket
 ├── webpage.*            -> HTML de la app principal embebido en PROGMEM
 ├── datapage.*           -> HTML de la página /datos embebido en PROGMEM
-└── diagpage.*           -> HTML de la página /diag embebido en PROGMEM
+├── diagpage.*           -> HTML de la página /diag embebido en PROGMEM
+└── jacuzzi_server_LOCAL_API_HTML/  -> Servidor Python (FastAPI+SQLite) que guarda el histórico, corre en un PC de la red local
 ```
 
 Cada módulo `.h`/`.cpp` está documentado en su propia cabecera con el
@@ -97,9 +119,17 @@ la duda ya está resuelta ahí.
 - **ESPAsyncWebServer** (me-no-dev / ESP32Async)
 - **AsyncTCP** (dependencia de la anterior)
 - **ArduinoJson** (v6 o v7)
+- **NimBLE-Arduino** (cliente BLE ligero, solo necesario si usas el
+  módulo de tiras LED, `tiras_led.*`)
 - Todo lo demás (WiFi, WebServer, DNSServer, Preferences, ArduinoOTA,
-  analogRead de los NTC) ya viene incluido con el core de ESP32 para
-  Arduino, sin librerías externas adicionales.
+  `HTTPClient` para el histórico remoto, analogRead de los NTC) ya
+  viene incluido con el core de ESP32 para Arduino, sin librerías
+  externas adicionales.
+
+Además, para guardar el histórico necesitas **Python 3** corriendo en
+un PC de tu red local (ver [Histórico remoto](#histórico-remoto-servidor-python));
+sus dependencias (`fastapi`, `uvicorn`, `pydantic`) están en
+`jacuzzi_server_LOCAL_API_HTML/requirements.txt` y se instalan solas.
 
 ## Configuración de la placa
 
@@ -228,19 +258,84 @@ y versión de Android/iOS), siempre puedes entrar manualmente a
 Una vez el ESP32 está en tu red, aparecerá en el IDE de Arduino como
 puerto de red (`jacuzzi-esp32`) para subir nuevo firmware sin cable.
 
+## Histórico remoto: servidor Python
+
+Desde esta migración, el histórico de temperaturas (`/datos`) y el de
+diagnóstico (`/diag`) **ya no se guardan en el ESP32**: se envían por
+HTTP a un servidor propio en Python (FastAPI + SQLite) que debe correr
+24/7 en un PC de la misma red local. El ESP32 sigue siendo el único
+que controla el jacuzzi (relés, sensores, programa); ese servidor
+**solo guarda y sirve datos**, no participa en el control.
+
+- Código y guía de instalación completa (arranque en Windows,
+  `start_server.bat`, cómo dejarlo corriendo como servicio, acceso
+  remoto con Tailscale...): **[jacuzzi_server_LOCAL_API_HTML/README.md](jacuzzi_server_LOCAL_API_HTML/README.md)**.
+- En el ESP32, ajusta en `config.h`: `REMOTE_LOG_SERVER_URL` (IP o
+  nombre mDNS del PC) y `REMOTE_LOG_API_KEY` (debe coincidir con la
+  clave `JACUZZI_API_KEY` del servidor).
+- El envío no bloquea el `loop()`: una tarea aparte (núcleo 0) hace las
+  peticiones HTTP con un timeout corto (`REMOTE_LOG_HTTP_TIMEOUT_MS`,
+  1.5 s por defecto). Si el PC no responde, las muestras se quedan en
+  un pequeño buffer de emergencia en RAM (`REMOTE_LOG_FALLBACK_CAPACITY`
+  = 100 para temperaturas, `REMOTE_DIAG_FALLBACK_CAPACITY` = 30 para
+  diagnóstico) y se reintentan solas en cuanto el servidor vuelve.
+- El breadcrumb de memoria RTC y el pico de duración de `loop()` del
+  diagnóstico **siguen siendo locales a propósito**: no pueden
+  depender de la red para registrar por qué se colgó el firmware.
+- Ventaja frente al esquema anterior (buffer circular en NVS): el
+  historial deja de estar limitado a ~7-10 días (temperaturas) o
+  ~16-17 horas (diagnóstico); ahora no tiene límite práctico de
+  capacidad, al vivir en una base de datos SQLite en el PC.
+
+## Control de tiras LED por Bluetooth
+
+Módulo opcional (`tiras_led.*`) para controlar tiras de LED RGB
+genéricas BLE (las típicas "smart LED strip" de AliExpress que de
+fábrica se manejan con apps como "Happy Lighting"), desde su propia
+página **`/leds`** con el mismo estilo visual que el resto de la web.
+Es completamente autocontenido: no toca el estado del jacuzzi ni
+ningún otro módulo, así que puede copiarse tal cual a otro proyecto.
+
+- **Emparejamiento**: escaneo BLE bajo demanda (6 s) desde `/leds`;
+  hasta 6 tiras en el grupo a la vez, identificadas por su MAC, con
+  reconexión automática y backoff si alguna se desconecta.
+- **Color, brillo y ~29 efectos nativos** (calculados por la propia
+  tira, no por el ESP32) agrupados en estáticos, saltos, crossfade y
+  blink, con velocidad ajustable.
+- **Programas horarios**: hasta 5 programas (días de la semana + hora
+  de encendido/apagado), aplicados por `ledsLoop()` sin bloquear el
+  resto del firmware.
+- Todo (tiras emparejadas, color, brillo, efecto, velocidad y
+  programas) se persiste en NVS y se recarga solo al arrancar.
+- Límite importante: NimBLE-Arduino reserva como mucho
+  `LEDS_MAX_CONCURRENT_CONNECTIONS` (6) conexiones BLE simultáneas por
+  defecto; si necesitas más tiras conectadas a la vez hay que subir
+  ese límite de compilación de la librería.
+
 ## Páginas web y API
 
 | Ruta | Método | Contenido |
 |---|:---:|---|
 | `/` | GET | App principal de control (o portal de configuración WiFi si se accede desde el AP) |
 | `/datos` | GET | Gráfica del histórico de temperaturas y eventos (semana completa, zoom, donuts de reparto) |
-| `/api/history` | GET | Histórico en JSON (hasta 7 días), usado por `/datos` |
+| `/api/history` | GET | Histórico en JSON (hasta 7 días), usado por `/datos`. El ESP32 lo pide al servidor Python |
+| `/api/history/deleteday` | POST | Borra el registro de un día (botón "borrar día" de `/datos`) |
 | `/api/history/format` | POST | Formatea el histórico de temperaturas (borrado total) |
 | `/diag` | GET | Panel de diagnóstico: heap, WiFi, clientes, reinicios |
 | `/api/diag` | GET | Muestras de diagnóstico en JSON + intervalo de muestreo actual |
 | `/api/diag/clear` | POST | Borra el histórico de diagnóstico |
 | `/api/diag/interval` | POST | Cambia el intervalo de muestreo del diagnóstico (`?ms=`) |
+| `/leds` | GET | Página de control de tiras LED por BLE |
+| `/api/leds/state` | GET | Estado actual de las tiras (color, brillo, efecto, programas) en JSON |
+| `/api/leds/scan` | POST | Inicia un escaneo BLE de 6 s para buscar tiras nuevas |
+| `/api/leds/scanresults` | GET | Resultado del escaneo en curso (MAC, nombre, RSSI de cada tira encontrada) |
+| `/api/leds/command` | POST | Envía un comando a las tiras (color, brillo, efecto, velocidad, emparejar/quitar, programas) |
 | `/ws` | — | WebSocket: estado en tiempo real + envío de comandos |
+
+`/api/history` y `/api/diag` en realidad las sirve ahora el servidor
+Python (el ESP32 solo hace de intermediario para que `/datos` y `/diag`
+no necesiten cambios); el resto de rutas de esta tabla las sigue
+sirviendo el propio ESP32.
 
 ## Diagnóstico y salud del sistema
 
@@ -249,8 +344,9 @@ cualquier proyecto embebido: *"¿por qué se ha reiniciado solo mientras
 yo dormía?"* — sin tener que pillarlo con el Monitor Serie abierto en
 el momento exacto.
 
-Qué guarda cada muestra (`diaglog.*`, buffer circular en NVS,
-independiente del histórico de temperaturas):
+Qué guarda cada muestra (`diaglog.*`, enviada al
+[servidor Python](#histórico-remoto-servidor-python), independiente del
+histórico de temperaturas):
 
 - **Motivo de arranque** (`esp_reset_reason`): encendido normal, reset
   externo, software, **PANIC**, watchdog (interno/tarea/otro),
@@ -279,9 +375,10 @@ Y en la propia página:
   reinicio no normal — ayuda a ver si los reinicios se agrupan
   (siempre a las pocas horas) o son esporádicos.
 - **Slider de frecuencia de registro** (1-30 min, por defecto 5):
-  cambia el intervalo en caliente sin recompilar, persistido en NVS.
-  Más frecuente = historial más fino pero cubre menos tiempo, ya que
-  el buffer tiene tamaño fijo (`DIAG_LOG_CAPACITY` en `config.h`).
+  cambia el intervalo en caliente sin recompilar, persistido en NVS
+  (es lo único que sigue guardándose en el ESP32; las muestras en sí
+  van al servidor Python, que ya no tiene un límite de capacidad fijo
+  como el antiguo buffer NVS de 200 entradas).
 - **Tabla completa** del histórico, con los reinicios no normales
   resaltados.
 - Botón para **borrar el historial** de diagnóstico.
@@ -290,12 +387,13 @@ Y en la propia página:
 
 Todo el arranque y el funcionamiento imprime mensajes con un prefijo
 por módulo para poder seguir lo que ocurre: `[MAIN]`, `[WIFI]`,
-`[RELAYS]`, `[TEMP]`, `[SCHED]`, `[WEB]`, `[OTA]`, `[DIAG]`. Por
-ejemplo, al arrancar verás el orden de inicialización, si conectó a
-una red conocida o abrió el portal de configuración, el motivo del
-último reset, las lecturas de temperatura cada `SENSOR_READ_MS`, los
-cambios de válvulas/modo, y cuándo un cliente web se conecta o envía
-un comando.
+`[RELAYS]`, `[TEMP]`, `[SCHED]`, `[WEB]`, `[OTA]`, `[DIAG]`,
+`[DATALOG]`, `[LEDS]`. Por ejemplo, al arrancar verás el orden de
+inicialización, si conectó a una red conocida o abrió el portal de
+configuración, el motivo del último reset, las lecturas de temperatura
+cada `SENSOR_READ_MS`, los cambios de válvulas/modo, el resultado de
+cada envío HTTP al servidor Python (`[DATALOG]`), y cuándo un cliente
+web se conecta o envía un comando.
 
 ## Notas de diseño
 
@@ -331,10 +429,16 @@ un comando.
 - **Reconexión WiFi con backoff**: los reintentos de conexión crecen
   progresivamente (`WIFI_RETRY_MIN_MS` → `WIFI_RETRY_MAX_MS`) para no
   saturar el radio si nunca hay red disponible.
-- **Histórico y diagnóstico**: `datalog.*` guarda temperaturas/eventos
-  para la gráfica de `/datos`, y `diaglog.*` guarda heap libre, stack,
+- **Histórico y diagnóstico**: `datalog.*` envía temperaturas/eventos
+  para la gráfica de `/datos`, y `diaglog.*` envía heap libre, stack,
   duración de loop, RSSI y motivo de reinicio para investigar cuelgues
-  desde `/diag`, ambos en buffers circulares respaldados en NVS.
+  desde `/diag`; ambos al [servidor Python](#histórico-remoto-servidor-python)
+  de la red local, con un pequeño buffer de emergencia en RAM del
+  propio ESP32 para cubrir cortes puntuales del servidor.
+- **Tiras LED por BLE**: `tiras_led.*` es autocontenido y no depende
+  del resto de módulos ni de `g_state`; si el jacuzzi no tiene tiras
+  LED, basta con no llamar a `ledsInit()`/`ledsLoop()` desde el `.ino`
+  (o dejar el grupo de tiras vacío) para que el módulo no haga nada.
 - **Interfaz visual**: paleta oscura tipo panel técnico/laboratorio
   (verde ámbar sobre negro), consistente entre `/`, `/datos` y `/diag`,
   con estados representados por color (pastillas verdes/rojas,
@@ -360,3 +464,17 @@ aparte: hay que volver a compilar y subir el sketch completo.
 **Quiero más o menos frecuencia en el histórico de diagnóstico.**
 Desde `/diag`, mueve el slider de "Frecuencia de registro" (1-30 min).
 Se aplica al momento y se guarda solo.
+
+**`/datos` o `/diag` aparecen vacíos o sin datos nuevos.**
+Comprueba que el servidor Python esté corriendo en el PC
+(`http://IP_DEL_PC:8000/api/health` debe responder `{"ok":true}`) y que
+`REMOTE_LOG_SERVER_URL`/`REMOTE_LOG_API_KEY` en `config.h` coincidan
+con la IP y la clave del servidor. Mientras el PC esté apagado, las
+últimas muestras se guardan en el buffer de emergencia del ESP32 y se
+envían solas en cuanto el servidor vuelve a responder.
+
+**No me aparecen tiras LED al escanear desde `/leds`.**
+Asegúrate de que la tira esté encendida y dentro de alcance BLE, y de
+que no esté ya conectada desde el móvil por su app original (una tira
+BLE solo admite una conexión activa a la vez). El escaneo dura 6 s;
+si no aparece, vuelve a pulsar "Buscar tiras".
