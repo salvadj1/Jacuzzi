@@ -34,9 +34,9 @@ a.back{color:var(--dim);text-decoration:none;font-size:11px;letter-spacing:1px;b
 a.back:hover{color:var(--amber);border-color:var(--amber);}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px;margin-top:0;flex:1;display:flex;flex-direction:column;min-height:0;position:relative;}
 
-.day-pager{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;flex:1;min-height:0;border-radius:8px;}
+.day-pager{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;flex:1;min-height:0;min-width:0;border-radius:8px;}
 .day-pager::-webkit-scrollbar{display:none;}
-.day-page{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;min-height:0;padding:0 2px;}
+.day-page{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;min-height:0;min-width:0;padding:0 2px;}
 
 .day-hdr{flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
 .day-hdr .name{font-size:13px;font-weight:900;color:#fff;letter-spacing:.5px;}
@@ -52,7 +52,15 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .donut-box .val b.pos{color:var(--green);}
 .donut-box .val b.neg{color:var(--red);}
 
-.chart-scroll{flex:1;min-height:0;background:#0d1512;border-radius:8px;position:relative;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;}
+// min-width:0 aqui es la clave del bug del zoom infinito: sin esto,
+// el ancho intrinseco del <canvas> (que crece al hacer zoom) empuja
+// hacia arriba el ancho de este contenedor y de sus padres (.day-page,
+// .day-pager), asi que en el SIGUIENTE redraw "containerW" ya viene
+// mas grande de lo real y se multiplica otra vez -> bucle de
+// retroalimentacion que revienta el limite de zoom y hace desaparecer
+// el canvas. overflow-x:auto NO basta por si solo en todos los
+// navegadores para forzarlo a 0.
+.chart-scroll{flex:1;min-height:0;min-width:0;background:#0d1512;border-radius:8px;position:relative;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:none;}
 .chart-scroll::-webkit-scrollbar{display:none;}
 .chart-scroll canvas{display:block;height:100%;}
 .zoom-hint{position:absolute;bottom:4px;right:8px;font-size:9px;color:var(--dim);background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;pointer-events:none;}
@@ -144,6 +152,17 @@ const pageStates = [];  // { zoom, evPts, canvas, scrollEl, marker, samples }
 // cualquier navegador (~16000px), asi que es un rango seguro y de sobra
 // para ver el detalle de un dia completo.
 const ZOOM_MIN = 1, ZOOM_MAX = 4;
+
+// Fuerza SIEMPRE el zoom a quedar dentro de [ZOOM_MIN, ZOOM_MAX], sin
+// importar de donde venga el valor. Si por lo que sea llega NaN o
+// Infinity (p.ej. un calculo intermedio corrupto), Math.min/Math.max
+// con NaN devuelven NaN y el zoom quedaria roto para siempre (el
+// canvas se queda con ancho "NaNpx" y desaparece) - por eso el
+// Number.isFinite de aqui es imprescindible, no cosmetico.
+function clampZoom(z){
+  if(!Number.isFinite(z)) return ZOOM_MIN;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
 
 // Evento actualmente abierto en el popup de detalle (indice de dia/pagina
 // y de evento dentro de esa pagina), para poder mover el circulo
@@ -307,15 +326,22 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
     ctx.fillText(v.toFixed(0)+'°',3,y+3);
   }
   const bandY = padT+plotH+bandGap;
-  const hoursStep = zoom>=3 ? 1 : (zoom>=1.8 ? 2 : 3);
+  // Marcas de hora cada 2h (fijo, ya no depende del zoom). Las horas
+  // dentro del rango de luz solar se pintan en blanco puro para
+  // distinguirlas a golpe de vista; el resto en el tono atenuado
+  // habitual. Rango de luz asumido 08:00-20:00 (ajustable aqui si
+  // se prefiere calcularlo por fecha/estacion).
+  const HOURS_STEP = 2;
+  const DAYLIGHT_START = 8, DAYLIGHT_END = 20;
   const dayStart = new Date(tMin*1000); dayStart.setHours(0,0,0,0);
-  for(let hh=0; hh<=24; hh+=hoursStep){
+  for(let hh=0; hh<=24; hh+=HOURS_STEP){
     const ts = dayStart.getTime()/1000 + hh*3600;
     if(ts < tMin || ts > tMax) continue;
     const x = xOf(ts);
-    ctx.strokeStyle='#1b2622';
+    const isDaylight = hh >= DAYLIGHT_START && hh <= DAYLIGHT_END;
+    ctx.strokeStyle = isDaylight ? '#ffffff' : '#1b2622';
     ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,bandY+bandH); ctx.stroke();
-    ctx.fillStyle='#9db3a6';
+    ctx.fillStyle = isDaylight ? '#ffffff' : '#9db3a6';
     ctx.fillText(hh.toString().padStart(2,'0')+':00', x-12, H-6);
   }
 
@@ -394,7 +420,7 @@ function buildUI(zoomByKey, visibleDayKey){
       '</div>'+
       '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
     pager.appendChild(page);
-    pageStates.push({ zoom: (zoomByKey[day.key] !== undefined ? zoomByKey[day.key] : ZOOM_MIN), evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
+    pageStates.push({ zoom: clampZoom(zoomByKey[day.key] !== undefined ? zoomByKey[day.key] : ZOOM_MIN), evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
 
     // Borrado de este dia concreto: pide confirmacion (no se puede
     // deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
@@ -464,6 +490,7 @@ function attachInteractivity(){
 
   pageStates.forEach((st,i)=>{
     let pinchStartDist = null, pinchStartZoom = 1;
+    let panStartX = null, panStartScroll = 0;
     let rafPending = false;
     let lastTapTime = 0;
 
@@ -477,6 +504,10 @@ function attachInteractivity(){
       if(e.touches.length===2){
         pinchStartDist = touchDist(e.touches[0], e.touches[1]);
         pinchStartZoom = st.zoom;
+        panStartX = null;
+      } else if(e.touches.length===1){
+        panStartX = e.touches[0].clientX;
+        panStartScroll = st.scrollEl.scrollLeft;
       }
     }, {passive:true});
 
@@ -485,22 +516,35 @@ function attachInteractivity(){
     // nosotros y no se dispara sin control. Ademas suavizamos el valor
     // objetivo con un factor de 0.35 en vez de saltar de golpe al valor
     // calculado, para que el pellizco sea fino y progresivo.
+    // touch-action:none deja TODO el manejo tactil en nuestras manos
+    // (antes 'pan-x' no bastaba: varios navegadores moviles seguian
+    // reconociendo el pellizco de 2 dedos como zoom nativo de la
+    // pagina, sin limite y sin forma de deshacerlo). Por eso aqui
+    // tambien reimplementamos a mano el paneo de 1 dedo, que antes
+    // daba el navegador gratis con 'pan-x'.
     st.scrollEl.addEventListener('touchmove', e=>{
-      if(e.touches.length!==2) return;
-      if(!pinchStartDist){
-        pinchStartDist = touchDist(e.touches[0], e.touches[1]);
-        pinchStartZoom = st.zoom;
-        return;
+      if(e.touches.length===2){
+        if(!pinchStartDist){
+          pinchStartDist = touchDist(e.touches[0], e.touches[1]);
+          pinchStartZoom = st.zoom;
+          e.preventDefault();
+          return;
+        }
+        const dist = touchDist(e.touches[0], e.touches[1]);
+        const target = clampZoom(pinchStartZoom * (dist / pinchStartDist));
+        st.zoom = clampZoom(st.zoom + (target - st.zoom) * 0.35);
+        e.preventDefault();
+        scheduleRedraw();
+      } else if(e.touches.length===1 && panStartX !== null){
+        const dx = e.touches[0].clientX - panStartX;
+        st.scrollEl.scrollLeft = panStartScroll - dx;
+        e.preventDefault();
       }
-      e.preventDefault();
-      const dist = touchDist(e.touches[0], e.touches[1]);
-      const target = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pinchStartZoom * (dist / pinchStartDist)));
-      st.zoom += (target - st.zoom) * 0.35;
-      scheduleRedraw();
     }, {passive:false});
 
     st.scrollEl.addEventListener('touchend', e=>{
       if(e.touches.length<2) pinchStartDist = null;
+      if(e.touches.length<1) panStartX = null;
     });
 
     // Zoom con la rueda del raton en PC, anclado a la posicion del cursor:
@@ -508,14 +552,28 @@ function attachInteractivity(){
     // cambiar el zoom, y despues se ajusta el scroll para que ese mismo
     // punto se quede bajo el cursor (si no, al hacer zoom out el punto
     // "se escapa" hacia la izquierda y parece que no ha pasado nada).
+    //
+    // IMPORTANTE: un trackpad genera eventos 'wheel' tanto al hacer
+    // scroll horizontal (paneo, moviendo sobre todo deltaX) como al
+    // hacer scroll vertical (deltaY). El bug real era que CUALQUIER
+    // deltaY<=0 (incluido 0, que es lo habitual en un swipe horizontal)
+    // se interpretaba como "zoom in", asi que un simple intento de
+    // desplazar la grafica terminaba siempre ampliando sin parar, y el
+    // zoom-out (que exige deltaY>0 "puro") casi nunca se disparaba.
+    // Ahora solo zoomeamos cuando el gesto es predominantemente
+    // vertical; si es mas horizontal que vertical, dejamos que sea un
+    // paneo normal (scroll nativo de .chart-scroll).
     st.scrollEl.addEventListener('wheel', e=>{
+      if(Math.abs(e.deltaX) > Math.abs(e.deltaY)){
+        return; // gesto horizontal: paneo nativo, no tocar el zoom
+      }
       e.preventDefault();
       const rect = st.scrollEl.getBoundingClientRect();
       const cursorX = e.clientX - rect.left;
       const contentX = st.scrollEl.scrollLeft + cursorX; // punto bajo el cursor, en coords. del canvas
 
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, st.zoom * factor));
+      const newZoom = clampZoom(st.zoom * factor);
       const ratio = newZoom / st.zoom;
       st.zoom = newZoom;
       redrawPage(i);
@@ -527,7 +585,7 @@ function attachInteractivity(){
     st.canvas.addEventListener('touchend', e=>{
       const now = Date.now();
       if(now - lastTapTime < 300){
-        st.zoom = st.zoom>1.5 ? ZOOM_MIN : Math.min(ZOOM_MAX, 2.6);
+        st.zoom = st.zoom>1.5 ? ZOOM_MIN : clampZoom(2.6);
         redrawPage(i);
         e.preventDefault();
       }

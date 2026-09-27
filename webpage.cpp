@@ -33,11 +33,12 @@ svg{width:100%;height:auto;display:block;}
 .minibox{font-family:var(--mono);display:flex;flex-direction:column;gap:0;background:#0d1512;border:1px solid var(--line);border-radius:6px;padding:5px 5px;}
 .minibox + .minibox{margin-top:5px;}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;}
-.tcard{background:transparent;border:none;border-bottom:2px solid var(--amber);padding:10px 4px;text-align:left;cursor:default;}
+.tcard{background:transparent;border:none;border-bottom:2px solid var(--amber);padding:10px 4px;text-align:left;cursor:default;position:relative;}
 .tcard.clickable{cursor:pointer;}
 .tcard-lbl{color:#ffffff;font-size:18px;font-weight:900;letter-spacing:.4px;}
 .tcard-val{display:block;color:var(--amber);font-size:30px;font-weight:900;margin-top:2px;}
 #rowT1 .tcard-lbl{color:#ff6b5e;} #rowT1 .tcard-val{color:#ff6b5e;}
+.max-badge{position:absolute;top:8px;right:4px;background:#122a12;color:#2eff7a;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;border:1px solid #1f5a2e;}
 #rowT2 .tcard-lbl{color:#4fd6ff;} #rowT2 .tcard-val{color:#4fd6ff;}
 #rowTempObj .tcard-lbl{color:#ffb020;} #rowTempObj .tcard-val{color:#ffb020;}
 #rowTempDis .tcard-lbl{color:#c78bff;} #rowTempDis .tcard-val{color:#c78bff;}
@@ -219,6 +220,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
       <div class="cards">
         <div class="tcard clickable" id="rowT1">
+          <div class="max-badge" id="maxT1Badge">MÁX —</div>
           <div class="tcard-lbl">T1 JACUZZI</div>
           <b class="tcard-val" id="statT1">—</b>
           <div class="offset-ctrl" id="offsetT1Ctrl">
@@ -475,12 +477,41 @@ function applyValve(id, open){
   el(id).classList.toggle('closed', !open);
 }
 
+// ---- Temperatura maxima del dia para T1 (Jacuzzi) ----
+// Se guarda en localStorage junto con la fecha; se reinicia automaticamente
+// al cambiar de dia. Reutilizable para cualquier sensor pasando su propia key.
+const MAX_T1_KEY = 'maxT1_value';
+const MAX_T1_DATE_KEY = 'maxT1_date';
+
+function todayKey(){
+  const d = new Date();
+  return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+}
+
+function updateDailyMax(temp){
+  const today = todayKey();
+  const storedDate = localStorage.getItem(MAX_T1_DATE_KEY);
+  let maxVal = parseFloat(localStorage.getItem(MAX_T1_KEY));
+
+  if(storedDate !== today || isNaN(maxVal)){
+    maxVal = temp;
+  } else if(temp > maxVal){
+    maxVal = temp;
+  }
+
+  localStorage.setItem(MAX_T1_KEY, maxVal);
+  localStorage.setItem(MAX_T1_DATE_KEY, today);
+
+  el('maxT1Badge').textContent = 'MÁX ' + maxVal.toFixed(1) + '°';
+}
+
 function render(){
   if(!state) return;
 
   el('tempJacuzzi').textContent = state.tJacuzzi.toFixed(1)+' °C';
   el('tempSolar').textContent = state.tSolar.toFixed(1)+' °C';
   el('statT1').textContent = state.tJacuzzi.toFixed(1)+' °C';
+  updateDailyMax(state.tJacuzzi);
   el('statT2').textContent = state.tSolar.toFixed(1)+' °C';
   el('offT1Val').textContent = (state.offsetT1>=0?'+':'')+state.offsetT1.toFixed(1)+' °C';
   el('offT2Val').textContent = (state.offsetT2>=0?'+':'')+state.offsetT2.toFixed(1)+' °C';
