@@ -143,7 +143,7 @@ const pageStates = [];  // { zoom, evPts, canvas, scrollEl, marker, samples }
 // ZOOM_MAX*530*3 se queda muy por debajo del limite de canvas de
 // cualquier navegador (~16000px), asi que es un rango seguro y de sobra
 // para ver el detalle de un dia completo.
-const ZOOM_MIN = 1, ZOOM_MAX = 6;
+const ZOOM_MIN = 1, ZOOM_MAX = 4;
 
 // Evento actualmente abierto en el popup de detalle (indice de dia/pagina
 // y de evento dentro de esa pagina), para poder mover el circulo
@@ -151,6 +151,21 @@ const ZOOM_MIN = 1, ZOOM_MAX = 6;
 let curEvtPage = -1, curEvtIndex = -1;
 
 async function loadData(){
+  // Antes de reconstruir, si la interfaz ya estaba montada (esto es un
+  // refresco automatico, no la carga inicial), guardamos el zoom de cada
+  // dia y que dia se estaba viendo, para restaurarlo despues de
+  // reconstruir. Sin esto, cada refresco automatico (cada 60s) devolvia
+  // el zoom a ZOOM_MIN y saltaba al dia de hoy sin avisar, cortando
+  // cualquier gesto de zoom en curso.
+  const zoomByKey = {};
+  let visibleDayKey = null;
+  if(pageStates.length > 0){
+    DAYS.forEach((day,i)=>{ zoomByKey[day.key] = pageStates[i].zoom; });
+    const pager = document.getElementById('pager');
+    const idx = Math.round(pager.scrollLeft / (pager.clientWidth || 1));
+    if(DAYS[idx]) visibleDayKey = DAYS[idx].key;
+  }
+
   try{
     const res = await fetch('/api/history');
     const data = await res.json();
@@ -159,7 +174,7 @@ async function loadData(){
     allSamples = [];
   }
   buildDays();
-  buildUI();
+  buildUI(zoomByKey, visibleDayKey);
 }
 
 function dayKey(d){ return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate(); }
@@ -337,7 +352,8 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
   return evPts;
 }
 
-function buildUI(){
+function buildUI(zoomByKey, visibleDayKey){
+  zoomByKey = zoomByKey || {};
   const pager = document.getElementById('pager');
   const weekStrip = document.getElementById('weekStrip');
   pager.innerHTML = '';
@@ -378,7 +394,7 @@ function buildUI(){
       '</div>'+
       '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
     pager.appendChild(page);
-    pageStates.push({ zoom: ZOOM_MIN, evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
+    pageStates.push({ zoom: (zoomByKey[day.key] !== undefined ? zoomByKey[day.key] : ZOOM_MIN), evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
 
     // Borrado de este dia concreto: pide confirmacion (no se puede
     // deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
@@ -410,7 +426,11 @@ function buildUI(){
   attachInteractivity();
   requestAnimationFrame(()=>{
     redrawAll();
-    goToDay(TODAY_INDEX); // al abrir la pagina, se situa en el dia actual
+    // Si veniamos de un refresco automatico y ese dia sigue existiendo,
+    // nos quedamos en el; si no (carga inicial, o el dia ya no esta en
+    // DAYS por ejemplo tras borrarlo), vamos al dia de hoy como antes.
+    const restoreIdx = visibleDayKey ? DAYS.findIndex(d=>d.key===visibleDayKey) : -1;
+    goToDay(restoreIdx >= 0 ? restoreIdx : TODAY_INDEX);
   });
 }
 

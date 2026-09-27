@@ -28,7 +28,16 @@ from pydantic import BaseModel
 # se deja aqui como constantes simples para que el ejemplo sea autocontenido.
 API_KEY = os.environ.get("JACUZZI_API_KEY", "cambia-esta-clave")  # debe coincidir con config.h del ESP32
 DB_PATH = os.environ.get("JACUZZI_DB_PATH", os.path.join(os.path.dirname(__file__), "jacuzzi.db"))
-HISTORY_DEFAULT_DAYS = 7  # mismo comportamiento que el antiguo /api/history del ESP32 ("hasta 7 dias")
+HISTORY_DEFAULT_DAYS = 2  # el ESP32 solo necesita ver los ultimos 2 dias en /datos;
+                           # el historico completo se sigue consultando desde la
+                           # web de este servidor (no hay perdida de datos, solo
+                           # se pide menos por defecto)
+DIAG_DEFAULT_HOURS = 12   # igual que arriba, pero para el diagnostico: 12h de
+                           # sobra para ver si algo va mal ahora mismo
+MAX_ROWS_HARD_LIMIT = 3000  # red de seguridad: por muchos cambios de estado que
+                             # haya en la ventana pedida, nunca se devuelven mas
+                             # filas que esto (evita agotar la RAM del ESP32
+                             # pase lo que pase, aunque cambien los intervalos)
 
 # Bits del campo "flags" (deben coincidir EXACTAMENTE con datalog.h del ESP32)
 LOG_FLAG_PUMP = 1 << 0
@@ -182,7 +191,16 @@ def get_history(
     pagina "/datos" del ESP32 no necesita ningun cambio en su JavaScript.
 
     Por defecto, si no se pasan fechas, devuelve los ultimos
-    HISTORY_DEFAULT_DAYS dias (igual que el comportamiento previo).
+    HISTORY_DEFAULT_DAYS dias -pensado para el ESP32, que tiene RAM
+    limitada-. El historico completo sigue disponible pidiendo un rango
+    de fechas explicito (p.ej. desde la web de este servidor).
+
+    MAX_ROWS_HARD_LIMIT actua como red de seguridad ademas de la ventana
+    de fechas: si dentro del rango pedido hay muchas mas muestras de lo
+    normal (p.ej. por muchos cambios de estado de bomba/valvulas/solar
+    en poco tiempo), nunca se devuelven mas de esas filas. Se cogen las
+    MAS RECIENTES del rango (ORDER BY ts DESC + LIMIT, reordenadas luego
+    ascendente) para no perder justo lo mas actual.
     """
     if hasta is None:
         hasta = int(time.time()) + 1
@@ -191,9 +209,11 @@ def get_history(
 
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT ts, t1, t2, flags FROM samples WHERE ts >= ? AND ts < ? ORDER BY ts ASC",
-            (desde, hasta),
+            "SELECT ts, t1, t2, flags FROM samples WHERE ts >= ? AND ts < ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (desde, hasta, MAX_ROWS_HARD_LIMIT),
         ).fetchall()
+    rows.reverse()  # se pidieron mas recientes primero (para el LIMIT); se devuelven en orden cronologico
 
     samples = [[r[0], r[1], r[2], r[3]] for r in rows]
     return JSONResponse({"samples": samples})
@@ -305,14 +325,21 @@ def get_diag_history(
 ):
     """Devuelve el historico de diagnostico en el MISMO formato/orden de
     columnas que generaba antes diaglogToJson() en el ESP32, para que
-    diagpage.cpp no necesite ningun cambio en su JavaScript. Sin filtro
-    de fechas, devuelve TODO (a diferencia de /api/history, aqui no hay
-    un limite de "7 dias por defecto": el volumen de diagnostico es mucho
-    menor y suele interesar verlo completo)."""
+    diagpage.cpp no necesite ningun cambio en su JavaScript.
+
+    Por defecto (sin fechas explicitas) devuelve solo las ultimas
+    DIAG_DEFAULT_HOURS horas: el diagnostico crecia sin limite (una fila
+    cada pocos minutos, para siempre), y el ESP32 solo necesita ver el
+    estado reciente para detectar si algo va mal ahora; el historico
+    completo de diagnostico se sigue pudiendo consultar desde la web de
+    este servidor con un rango de fechas explicito.
+
+    MAX_ROWS_HARD_LIMIT es la misma red de seguridad que en /api/history.
+    """
     if hasta is None:
         hasta = int(time.time()) + 1
     if desde is None:
-        desde = 0
+        desde = hasta - DIAG_DEFAULT_HOURS * 3600
 
     with get_db() as conn:
         rows = conn.execute(
@@ -321,10 +348,12 @@ def get_diag_history(
                    max_loop_micros, min_stack_bytes, rssi, ws_clients,
                    wifi_connected, reset_reason, reset_reason_text,
                    breadcrumb_text, wifi_reconnects, ntc_errors, event_class
-            FROM diag_samples WHERE ts >= ? AND ts < ? ORDER BY ts ASC
+            FROM diag_samples WHERE ts >= ? AND ts < ?
+            ORDER BY ts DESC LIMIT ?
             """,
-            (desde, hasta),
+            (desde, hasta, MAX_ROWS_HARD_LIMIT),
         ).fetchall()
+    rows.reverse()  # idem: se piden mas recientes primero, se devuelven en orden cronologico
 
     samples = [list(r) for r in rows]
     # intervalMs no tiene sentido en el servidor (es un ajuste del ESP32,
