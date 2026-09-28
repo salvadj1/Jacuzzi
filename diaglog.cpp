@@ -347,14 +347,55 @@ void diaglogSetStage(uint8_t stage) {
   g_rtcStage = stage;
 }
 
+// Construye una respuesta VALIDA para diagpage.cpp cuando no se pueden
+// entregar muestras: lista vacia (la pagina muestra "sin datos") mas un
+// campo "error" informativo. Reutilizable para cualquier endpoint que
+// devuelva {intervalMs, samples}.
+static String diagErrorJson(const char *msg) {
+  String out;
+  out.reserve(96);
+  out += "{\"intervalMs\":";
+  out += g_intervalMs;
+  out += ",\"samples\":[],\"error\":\"";
+  out += msg;
+  out += "\"}";
+  return out;
+}
+
 String diaglogToJson() {
   if (WiFi.status() == WL_CONNECTED) {
+    // Solo se piden las ultimas REMOTE_DIAG_FETCH_HOURS horas al servidor
+    // (parametro "desde" de /api/diag). Sin hora NTP valida no se puede
+    // calcular "desde": se pide sin parametros y el servidor aplica su
+    // ventana por defecto.
+    String url = String(REMOTE_LOG_SERVER_URL) + "/api/diag";
+    time_t now = time(nullptr);
+    if (now > 1600000000) {
+      url += "?desde=";
+      url += (uint32_t)(now - (time_t)REMOTE_DIAG_FETCH_HOURS * 3600);
+    }
+
     HTTPClient http;
     http.setTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
     http.setConnectTimeout(REMOTE_LOG_HTTP_TIMEOUT_MS);
-    if (http.begin(String(REMOTE_LOG_SERVER_URL) + "/api/diag")) {
+    if (http.begin(url)) {
       int code = http.GET();
       if (code == 200) {
+        // Comprobacion de memoria ANTES de descargar: getString() reserva
+        // el JSON entero y send() lo copia otra vez, asi que hace falta un
+        // bloque continuo de varias veces su tamaño. Si no cabe, se
+        // responde con un error controlado en vez de arriesgar un crash.
+        int size = http.getSize();                 // -1 si llega por partes
+        uint32_t maxAlloc = ESP.getMaxAllocHeap(); // mayor bloque continuo libre
+        bool cabe = (size > 0)
+          ? ((uint32_t)size * REMOTE_DIAG_HEAP_FACTOR <= maxAlloc)
+          : (maxAlloc >= REMOTE_DIAG_MIN_FREE_UNKNOWN);
+        if (!cabe) {
+          http.end();
+          Serial.printf("[DIAG] /api/diag: JSON de %d bytes no cabe (mayor bloque libre %u). Respuesta vacia.\n",
+                        size, (unsigned)maxAlloc);
+          return diagErrorJson("memoria insuficiente para descargar el historico");
+        }
         String body = http.getString();
         http.end();
         return body;

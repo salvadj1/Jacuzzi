@@ -38,7 +38,7 @@ svg{width:100%;height:auto;display:block;}
 .tcard-lbl{color:#ffffff;font-size:18px;font-weight:900;letter-spacing:.4px;}
 .tcard-val{display:block;color:var(--amber);font-size:30px;font-weight:900;margin-top:2px;}
 #rowT1 .tcard-lbl{color:#ff6b5e;} #rowT1 .tcard-val{color:#ff6b5e;}
-.max-badge{fill:#2eff7a;font-weight:700;font-family:var(--mono, monospace);}
+.max-badge{fill:#ffffff;font-weight:700;font-family:var(--mono, monospace);}
 #rowT2 .tcard-lbl{color:#4fd6ff;} #rowT2 .tcard-val{color:#4fd6ff;}
 #rowTempObj .tcard-lbl{color:#ffb020;} #rowTempObj .tcard-val{color:#ffb020;}
 #rowTempDis .tcard-lbl{color:#c78bff;} #rowTempDis .tcard-val{color:#c78bff;}
@@ -54,8 +54,8 @@ svg{width:100%;height:auto;display:block;}
 .reject-blink{background:#c0392b!important;border-color:#c0392b!important;color:#fff!important;}
 .minibox .row2{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:10px 0;border-bottom:1px solid #223229;}
 .pillrow{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
-.pill{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;padding:7px 14px;border-radius:22px;background:#0d2a19;color:#9fe1cb;}
-.pill.bad{background:#2a1512;color:#f0997b;}
+.pill{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;padding:7px 14px;border-radius:22px;background:var(--green);color:#03140a;}
+.pill.bad{background:var(--red);color:#1a0503;}
 .pill .pilllbl{opacity:.8;}
 .pill b{font-weight:900;}
 .valverow{border-top:1px solid #22332c;padding-top:12px;display:flex;flex-direction:column;gap:10px;}
@@ -379,10 +379,14 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
   <!-- ===== CAPA DE TEXTOS: se pinta la última para quedar siempre por encima de tuberías y formas ===== -->
   <g id="textLayer">
-    <text x="102" y="480" text-anchor="middle" class="max-badge" id="maxT1Badge" font-size="10">MÁX —</text>
-    <text x="102" y="492.5" text-anchor="middle" class="lbl">JACUZZI · 1 m³</text>
+    <!-- Medidor semicircular MAX. HOY (T1): arcos de color, aguja y valor blancos. Los arcos se generan por JS (buildGauge) -->
+    <g id="t1GaugeZones"></g>
+    <line id="t1GaugeNeedle" x1="0" y1="0" x2="0" y2="0" stroke="#ffffff" stroke-width="3" stroke-linecap="round" style="display:none"/>
+    <text x="102" y="440" text-anchor="middle" class="lbl">MAX. HOY</text>
+    <text x="102" y="466" text-anchor="middle" class="max-badge" id="maxT1Badge" font-size="26">—</text>
+    <text x="48" y="479" text-anchor="middle" class="lbl" font-size="11">20°</text>
+    <text x="156" y="479" text-anchor="middle" class="lbl" font-size="11">50°</text>
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
-    <text x="54" y="594.5" text-anchor="middle" class="val" id="tempJacuzzi" font-size="14">— °C</text>
 
     <text x="416" y="399.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
     <text x="416" y="420" text-anchor="middle" class="val" id="tempSolar" font-size="14">— °C</text>
@@ -478,40 +482,83 @@ function applyValve(id, open){
 }
 
 // ---- Temperatura maxima del dia para T1 (Jacuzzi) ----
-// Se guarda en localStorage junto con la fecha; se reinicia automaticamente
-// al cambiar de dia. Reutilizable para cualquier sensor pasando su propia key.
-const MAX_T1_KEY = 'maxT1_value';
-const MAX_T1_DATE_KEY = 'maxT1_date';
+// Sale del historico del servidor (/api/history, la misma fuente que /datos):
+// es el T1 mas alto registrado HOY (dia natural local). null = aun no hay
+// muestras de hoy. Se refresca cada 5 min (ver fetchDailyMax).
+let dailyMaxT1 = null;
 
-function todayKey(){
-  const d = new Date();
-  return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+// ---- Medidor semicircular MAX. HOY (T1) ----
+// Escala 20-50 C sobre 180 grados. Zonas de color (limite superior de cada
+// una): azul frio, verde templado, ambar ideal, rojo demasiado caliente.
+const G_CX = 102, G_CY = 462, G_R = 54;
+const G_MIN = 20, G_MAX = 50;
+const G_ZONES = [
+  { to: 28, color: '#00c8f0' },
+  { to: 32, color: '#2eff7a' },
+  { to: 36, color: '#ffb020' },
+  { to: 50, color: '#ff3b2e' }
+];
+
+// Punto del medidor para una temperatura "v" a un radio "r" desde el centro.
+function gaugePt(v, r){
+  const f = Math.min(1, Math.max(0, (v - G_MIN) / (G_MAX - G_MIN)));
+  const a = Math.PI * f;                       // 0 = izquierda, PI = derecha
+  return [G_CX - r * Math.cos(a), G_CY - r * Math.sin(a)];
 }
 
-function updateDailyMax(temp){
-  const today = todayKey();
-  const storedDate = localStorage.getItem(MAX_T1_DATE_KEY);
-  let maxVal = parseFloat(localStorage.getItem(MAX_T1_KEY));
+// Dibuja los arcos de color segun G_ZONES (se llama una sola vez al cargar).
+function buildGauge(){
+  const g = el('t1GaugeZones');
+  let from = G_MIN;
+  G_ZONES.forEach(z=>{
+    const p1 = gaugePt(from, G_R), p2 = gaugePt(z.to, G_R);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M' + p1[0].toFixed(1) + ' ' + p1[1].toFixed(1) +
+      ' A' + G_R + ' ' + G_R + ' 0 0 1 ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', z.color);
+    path.setAttribute('stroke-width', '12');
+    g.appendChild(path);
+    from = z.to;
+  });
+}
 
-  if(storedDate !== today || isNaN(maxVal)){
-    maxVal = temp;
-  } else if(temp > maxVal){
-    maxVal = temp;
-  }
+// Pinta el valor y la aguja con el maximo de hoy (dailyMaxT1).
+// Sin datos: muestra "—" y oculta la aguja.
+function updateMaxGauge(){
+  const has = (dailyMaxT1 !== null);
+  const needle = el('t1GaugeNeedle');
+  el('maxT1Badge').textContent = has ? dailyMaxT1.toFixed(1) + '°' : '—';
+  needle.style.display = has ? '' : 'none';
+  if(!has) return;
+  const p1 = gaugePt(dailyMaxT1, G_R - 8), p2 = gaugePt(dailyMaxT1, G_R + 8);
+  needle.setAttribute('x1', p1[0].toFixed(1)); needle.setAttribute('y1', p1[1].toFixed(1));
+  needle.setAttribute('x2', p2[0].toFixed(1)); needle.setAttribute('y2', p2[1].toFixed(1));
+}
 
-  localStorage.setItem(MAX_T1_KEY, maxVal);
-  localStorage.setItem(MAX_T1_DATE_KEY, today);
-
-  el('maxT1Badge').textContent = 'MÁX ' + maxVal.toFixed(1) + '°';
+// Pide el historico y guarda el T1 mas alto de las muestras de hoy.
+// Muestras: [ts, t1, t2, flags]. Si falla la peticion se conserva el
+// ultimo valor conocido.
+async function fetchDailyMax(){
+  try{
+    const res = await fetch('/api/history');
+    const data = await res.json();
+    const d0 = new Date(); d0.setHours(0,0,0,0);
+    const from = d0.getTime()/1000;          // inicio del dia local (segundos)
+    let mx = null;
+    (data.samples || []).forEach(s=>{
+      if(s[0] >= from && (mx === null || s[1] > mx)) mx = s[1];
+    });
+    dailyMaxT1 = mx;
+    updateMaxGauge();
+  }catch(e){ /* sin servidor: se mantiene el ultimo valor */ }
 }
 
 function render(){
   if(!state) return;
 
-  el('tempJacuzzi').textContent = state.tJacuzzi.toFixed(1)+' °C';
   el('tempSolar').textContent = state.tSolar.toFixed(1)+' °C';
   el('statT1').textContent = state.tJacuzzi.toFixed(1)+' °C';
-  updateDailyMax(state.tJacuzzi);
   el('statT2').textContent = state.tSolar.toFixed(1)+' °C';
   el('offT1Val').textContent = (state.offsetT1>=0?'+':'')+state.offsetT1.toFixed(1)+' °C';
   el('offT2Val').textContent = (state.offsetT2>=0?'+':'')+state.offsetT2.toFixed(1)+' °C';
@@ -758,6 +805,11 @@ el('btnRestart').onclick = ()=>{
 // Reloj visual: se actualiza cada segundo interpolando localmente entre
 // los estados reales que llegan por WebSocket (evita parpadeo de la hora)
 setInterval(renderSchedule, 1000);
+
+buildGauge();
+updateMaxGauge();
+fetchDailyMax();
+setInterval(fetchDailyMax, 300000); // refresca el maximo del dia cada 5 min
 
 connectWs();
 </script>

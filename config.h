@@ -105,6 +105,20 @@
 // el datalog para cubrir un corte puntual del servidor.
 #define REMOTE_DIAG_FALLBACK_CAPACITY 30
 
+// Ventana de horas que /diag pide al servidor Python (ver diaglogToJson en
+// diaglog.cpp). Menos horas = JSON mas pequeño = menos riesgo de agotar el
+// heap del ESP32 al descargarlo. El historico completo sigue en el servidor.
+#define REMOTE_DIAG_FETCH_HOURS 6
+
+// Antes de descargar el JSON del servidor se exige que el mayor bloque de
+// heap libre sea al menos N veces su tamaño (el String de la descarga + la
+// copia que hace send() + margen). Si no cabe, se responde con un error
+// controlado en vez de arriesgar un crash por falta de memoria.
+#define REMOTE_DIAG_HEAP_FACTOR 3
+// Si el servidor no informa del tamaño (respuesta por partes), se exige al
+// menos este bloque libre (bytes) para intentar la descarga.
+#define REMOTE_DIAG_MIN_FREE_UNKNOWN 40000
+
 // ---------------- Watchdog software ----------------
 // Si el loop() se queda colgado (por ejemplo, por un fallo en una
 // libreria de red) y no se "alimenta" el watchdog en este tiempo, el

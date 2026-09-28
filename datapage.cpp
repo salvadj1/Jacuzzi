@@ -247,29 +247,23 @@ function stateAt(samples, ts){
   return st;
 }
 
-// Bonus termico del dia: grados netos (+/-) ganados o perdidos en T1
-// Jacuzzi, tomando la temperatura cada 15 minutos (no las muestras en
-// bruto, que llegan mas seguido en cada cambio de estado) desde 5 minutos
-// despues del primer arranque de bomba del dia (auto o manual). Cada
-// tramo de 15 min solo cuenta si la bomba estuvo en marcha al empezar
-// ese tramo; si estaba parada, ese tramo no suma ni resta.
+// Bonus termico del dia: grados netos (+/-) de T1 Jacuzzi respecto a la
+// referencia del dia. La referencia (bonus = 0) es T1 en el instante en
+// que TERMINA la primera descarga solar del dia (estado 2 -> otro estado).
+// Despues, cada vez que termina una nueva descarga, el bonus se actualiza
+// a: T1 al terminar esa descarga - T1 de la referencia (acumulado).
+// Una descarga que sigue en curso al final de los datos no cuenta todavia.
+// Con 0 o 1 descargas terminadas el bonus es 0.
 function bonusTermico(samples){
-  const firstOnIdx = samples.findIndex(s=>s[3]!==0);
-  if(firstOnIdx<0) return 0; // la bomba no arranco ese dia
-  const startTs = samples[firstOnIdx][0] + 300; // 5 min despues del primer arranque
-  const endTs = samples[samples.length-1][0];
-  if(endTs <= startTs) return 0;
-
+  let refVal = null;  // T1 al terminar la primera descarga (bonus 0)
   let bonus = 0;
-  let prevTs = startTs, prevVal = valueAt(samples, startTs, 1);
-  let t = startTs + 900; // rejilla fija cada 15 min
-  while(true){
-    const point = Math.min(t, endTs);
-    const curVal = valueAt(samples, point, 1);
-    if(stateAt(samples, prevTs) !== 0) bonus += (curVal - prevVal);
-    prevVal = curVal; prevTs = point;
-    if(point >= endTs) break;
-    t += 900;
+  for(let i=0;i<samples.length-1;i++){
+    // Fin de descarga: esta muestra es SOLAR y la siguiente ya no
+    if(samples[i][3]===2 && samples[i+1][3]!==2){
+      const t1 = samples[i+1][1]; // T1 en el instante en que termina
+      if(refVal===null) refVal = t1;   // primera descarga: fija la referencia
+      else bonus = t1 - refVal;        // siguientes: actualiza el bonus
+    }
   }
   return bonus;
 }
