@@ -28,7 +28,7 @@ const char DATA_HTML[] PROGMEM = R"HTMLPAGE(
 *{box-sizing:border-box;}
 html,body{height:100%;}
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);padding:14px;}
-.wrap{max-width:560px;margin:0 auto;height:calc(100vh - 28px);display:flex;flex-direction:column;}
+.wrap{max-width:560px;margin:0 auto;height:calc(100vh - 28px);height:calc(100dvh - 28px);display:flex;flex-direction:column;}
 h1{font-size:12px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:0 0 8px 4px;display:flex;justify-content:space-between;align-items:center;flex:0 0 auto;}
 a.back{color:var(--dim);text-decoration:none;font-size:11px;letter-spacing:1px;border:1px solid var(--line);padding:5px 10px;border-radius:6px;}
 a.back:hover{color:var(--amber);border-color:var(--amber);}
@@ -38,14 +38,14 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .day-pager::-webkit-scrollbar{display:none;}
 .day-page{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;min-height:0;min-width:0;padding:0 2px;}
 
-.day-hdr{flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
+.day-hdr{flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;}
 .day-hdr .name{font-size:13px;font-weight:900;color:#fff;letter-spacing:.5px;}
 .day-hdr .today-badge{font-size:10px;color:#0b1210;background:var(--amber);padding:3px 8px;border-radius:8px;font-weight:900;}
 .day-hdr .right{display:flex;gap:6px;align-items:center;}
 .btn-del-dia{font-size:10px;color:var(--red);background:transparent;border:1px solid var(--line);padding:4px 8px;border-radius:6px;cursor:pointer;font-family:var(--mono);}
 .btn-del-dia:hover{border-color:var(--red);}
 
-.donuts{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:space-between;row-gap:8px;margin-bottom:8px;}
+.donuts{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:space-between;row-gap:4px;margin-bottom:4px;}
 .donut-box{text-align:center;flex:1 1 18%;min-width:58px;}
 .donut-box .val{font-size:10px;color:var(--dim);margin-top:3px;letter-spacing:.2px;}
 .donut-box .val b{display:block;font-size:13px;color:#fff;margin-top:0;}
@@ -73,12 +73,12 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
   100%{ transform:scale(.8); opacity:1; }
 }
 
-.week-strip{flex:0 0 auto;display:flex;gap:4px;margin-top:8px;}
+.week-strip{flex:0 0 auto;display:flex;gap:4px;margin-top:4px;}
 .week-cell{flex:1;height:32px;border-radius:6px;background:#0d1512;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);font-weight:800;cursor:pointer;}
 .week-cell.today{border-color:var(--amber);color:var(--amber);}
 .week-cell.sel{background:var(--amber);color:#0b1210;border-color:var(--amber);}
 
-.legend{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-top:8px;justify-content:center;flex:0 0 auto;flex-wrap:wrap;}
+.legend{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-top:4px;justify-content:center;flex:0 0 auto;flex-wrap:wrap;}
 .legend span{display:inline-flex;align-items:center;gap:4px;}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
 #emptyMsg{color:var(--dim);font-size:12px;text-align:center;padding:40px 10px;}
@@ -113,6 +113,8 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
     <div class="legend">
       <span><i class="dot" style="background:var(--water)"></i>T1 Jacuzzi</span>
       <span><i class="dot" style="background:var(--water-hot)"></i>T2 Solar</span>
+      <span><i class="dot" style="background:rgba(255,176,32,0.6)"></i>Horas de dia</span>
+      <span><i class="dot" style="background:rgba(0,100,200,0.6)"></i>Horas de noche</span>
       <span><i class="dot" style="background:var(--amber)"></i>Toca un evento para ver detalle</span>
     </div>
 
@@ -152,6 +154,11 @@ const pageStates = [];  // { zoom, evPts, canvas, scrollEl, marker, samples }
 // cualquier navegador (~16000px), asi que es un rango seguro y de sobra
 // para ver el detalle de un dia completo.
 const ZOOM_MIN = 1, ZOOM_MAX = 4;
+
+// Limite absoluto en px del ancho del canvas: pase lo que pase con el
+// ancho del contenedor (distintas pantallas) o con el bucle de
+// realimentacion, el canvas nunca crece mas alla de esto.
+const MAX_CANVAS_W = 3951;
 
 // Fuerza SIEMPRE el zoom a quedar dentro de [ZOOM_MIN, ZOOM_MAX], sin
 // importar de donde venga el valor. Si por lo que sea llega NaN o
@@ -298,7 +305,7 @@ function donutSVG(pct,color,size){
 // Devuelve los puntos de evento (coordenadas CSS px) para detectar toques sobre ellos.
 function drawDayChart(canvas, containerW, containerH, zoom, samples){
   const dpr = window.devicePixelRatio || 1;
-  const W = containerW*zoom, H = containerH;
+  const W = Math.min(containerW*zoom, MAX_CANVAS_W), H = containerH;
   canvas.style.width = W+'px'; canvas.style.height = H+'px';
   canvas.width = W*dpr; canvas.height = H*dpr;
   const ctx = canvas.getContext('2d');
@@ -319,6 +326,23 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
   const xOf=ts=>padL+(ts-tMin)/(tMax-tMin)*plotW;
   const yOf=v=>padT+plotH-(v-vMin)/(vMax-vMin)*plotH;
 
+  // Bandas de fondo dia/noche: rango de luz solar asumido 08:00-20:00
+  // (mismo rango que se usa mas abajo para las horas en blanco).
+  // DAYLIGHT_START/END se declaran aqui arriba (antes solo existian mas
+  // abajo, junto a las marcas de hora) porque esta banda necesita
+  // pintarse ANTES que rejilla y curvas para quedar detras de todo.
+  const DAYLIGHT_START = 8, DAYLIGHT_END = 20;
+  const dayStart0 = new Date(tMin*1000); dayStart0.setHours(0,0,0,0);
+  const bandStartTs = dayStart0.getTime()/1000;
+  for(let hh=0; hh<24; hh++){
+    const segStart = bandStartTs + hh*3600, segEnd = segStart+3600;
+    if(segEnd < tMin || segStart > tMax) continue;
+    const x1 = xOf(Math.max(segStart,tMin)), x2 = xOf(Math.min(segEnd,tMax));
+    const isDaylight = hh >= DAYLIGHT_START && hh < DAYLIGHT_END;
+    ctx.fillStyle = isDaylight ? 'rgba(255,176,32,0.08)' : 'rgba(0,100,200,0.14)';
+    ctx.fillRect(x1, padT, Math.max(x2-x1,1), H-padT-padB);
+  }
+
   ctx.strokeStyle='#1b2622'; ctx.fillStyle='#9db3a6'; ctx.font='9px monospace'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const v=vMin+(vMax-vMin)*i/4, y=yOf(v);
@@ -332,18 +356,19 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
   // habitual. Rango de luz asumido 08:00-20:00 (ajustable aqui si
   // se prefiere calcularlo por fecha/estacion).
   const HOURS_STEP = 2;
-  const DAYLIGHT_START = 8, DAYLIGHT_END = 20;
   const dayStart = new Date(tMin*1000); dayStart.setHours(0,0,0,0);
+  ctx.setLineDash([2,3]); // lineas de hora punteadas (antes solidas, se confundian con la rejilla)
   for(let hh=0; hh<=24; hh+=HOURS_STEP){
     const ts = dayStart.getTime()/1000 + hh*3600;
     if(ts < tMin || ts > tMax) continue;
     const x = xOf(ts);
     const isDaylight = hh >= DAYLIGHT_START && hh <= DAYLIGHT_END;
-    ctx.strokeStyle = isDaylight ? '#ffffff' : '#1b2622';
+    ctx.strokeStyle = isDaylight ? '#ffffff' : '#7fb8ff';
     ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,bandY+bandH); ctx.stroke();
     ctx.fillStyle = isDaylight ? '#ffffff' : '#9db3a6';
     ctx.fillText(hh.toString().padStart(2,'0')+':00', x-12, H-6);
   }
+  ctx.setLineDash([]);
 
   // Franja de estado: separada de la curva y mas alta (bandH) para que
   // se distinga bien de un vistazo, con un borde tenue para marcar sus
@@ -412,15 +437,25 @@ function buildUI(zoomByKey, visibleDayKey){
       '<div class="day-hdr"><span class="name">'+DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1)+'</span>'+
       '<span class="right">'+(isToday?'<span class="today-badge">HOY</span>':'')+'<button class="btn-del-dia" data-daykey="'+day.key+'">BORRAR DIA</button></span></div>'+
       '<div class="donuts">'+
-        '<div class="donut-box">'+donutSVG(t[2]/totalDay,'#e0672e',54)+'<div class="val">SOLAR<br><b>'+fmtDur(t[2])+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#00c8f0',54)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(t[0]/totalDay,'#9db3a6',54)+'<div class="val">PARADO<br><b>'+fmtDur(t[0])+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(descargasPct,'#ffb020',54)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
-        '<div class="donut-box">'+donutSVG(bonusPct,bonusColor,54)+'<div class="val">BONUS TÉRMICO<br><b class="'+bonusClass+'">'+bonusTxt+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(t[2]/totalDay,'#e0672e',44)+'<div class="val">SOLAR<br><b>'+fmtDur(t[2])+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#00c8f0',44)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(t[0]/totalDay,'#9db3a6',44)+'<div class="val">PARADO<br><b>'+fmtDur(t[0])+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(descargasPct,'#ffb020',44)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
+        '<div class="donut-box">'+donutSVG(bonusPct,bonusColor,44)+'<div class="val">BONUS TÉRMICO<br><b class="'+bonusClass+'">'+bonusTxt+'</b></div></div>'+
       '</div>'+
       '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
     pager.appendChild(page);
     pageStates.push({ zoom: clampZoom(zoomByKey[day.key] !== undefined ? zoomByKey[day.key] : ZOOM_MIN), evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
+
+    // La grafica se quedaba mas baja de lo disponible porque el alto
+    // del canvas se fijaba una sola vez (redraw inicial via rAF) y no
+    // se volvia a ajustar si el layout terminaba de asentarse despues
+    // (fuentes, barra de direcciones movil, etc.). Con ResizeObserver
+    // se redibuja cada vez que el contenedor cambia de tamano real.
+    if(typeof ResizeObserver !== 'undefined'){
+      const idx = pageStates.length-1;
+      new ResizeObserver(()=>redrawPage(idx)).observe(page.querySelector('.chart-scroll'));
+    }
 
     // Borrado de este dia concreto: pide confirmacion (no se puede
     // deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
@@ -457,6 +492,12 @@ function buildUI(zoomByKey, visibleDayKey){
     // DAYS por ejemplo tras borrarlo), vamos al dia de hoy como antes.
     const restoreIdx = visibleDayKey ? DAYS.findIndex(d=>d.key===visibleDayKey) : -1;
     goToDay(restoreIdx >= 0 ? restoreIdx : TODAY_INDEX);
+    // Red de seguridad: en algunos navegadores/WebViews el layout final
+    // (fuentes, barra de direcciones movil) tarda un poco mas en
+    // asentarse que un solo rAF, y el ResizeObserver por si solo no
+    // siempre llega a tiempo. Redibujamos otra vez poco despues para
+    // que el canvas coja la altura real ya asentada.
+    setTimeout(redrawAll, 300);
   });
 }
 
@@ -467,10 +508,30 @@ function goToDay(idx){
   const pager = document.getElementById('pager');
   if(pager.children[idx]) pager.scrollTo({left: pager.children[idx].offsetLeft, behavior:'smooth'});
 }
+// Fuerza a mano la altura de chart-scroll en vez de fiarse solo del
+// flex:1 del CSS: el <canvas> es un "elemento reemplazado" y algunos
+// motores de renderizado (sobre todo WebViews embebidos) lo miden con
+// su tamano intrinseco por defecto (300x150) dentro de un flex,
+// dejando huecos igual que en un layout roto aunque min-height:0 este
+// puesto en toda la cadena. Calculando aqui la altura disponible a
+// partir de elementos SIN canvas (pager, cabecera del dia, donuts) nos
+// libramos de esa dependencia por completo.
+function computeChartHeight(page, scrollEl){
+  const pager = document.getElementById('pager');
+  const hdr = page.querySelector('.day-hdr');
+  const donuts = page.querySelector('.donuts');
+  const hdrStyle = getComputedStyle(hdr), donutsStyle = getComputedStyle(donuts);
+  const hdrH = hdr.offsetHeight + parseFloat(hdrStyle.marginBottom||0);
+  const donutsH = donuts.offsetHeight + parseFloat(donutsStyle.marginBottom||0);
+  return Math.max(120, pager.clientHeight - hdrH - donutsH);
+}
 function redrawPage(i){
   const st = pageStates[i];
+  const page = st.scrollEl.closest('.day-page');
+  const h = computeChartHeight(page, st.scrollEl);
+  st.scrollEl.style.height = h+'px';
   const rect = st.scrollEl.getBoundingClientRect();
-  st.evPts = drawDayChart(st.canvas, rect.width, rect.height, st.zoom, st.samples);
+  st.evPts = drawDayChart(st.canvas, rect.width, h, st.zoom, st.samples);
   if(i===curEvtPage) positionMarker(i);
 }
 function redrawAll(){ pageStates.forEach((_,i)=>redrawPage(i)); }
@@ -564,8 +625,13 @@ function attachInteractivity(){
     // vertical; si es mas horizontal que vertical, dejamos que sea un
     // paneo normal (scroll nativo de .chart-scroll).
     st.scrollEl.addEventListener('wheel', e=>{
-      if(Math.abs(e.deltaX) > Math.abs(e.deltaY)){
-        return; // gesto horizontal: paneo nativo, no tocar el zoom
+      // Antes se exigia deltaY estrictamente mayor que deltaX para
+      // zoomear, y en trackpads el zoom-out (deltaY>0 "puro") casi
+      // nunca ganaba a deltaX -> se interpretaba como paneo y el
+      // zoom-out no se disparaba nunca. Damos margen a deltaY con
+      // un factor 1.5 para que gestos casi-verticales sigan siendo zoom.
+      if(Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.5){
+        return; // gesto claramente horizontal: paneo nativo, no tocar el zoom
       }
       e.preventDefault();
       const rect = st.scrollEl.getBoundingClientRect();

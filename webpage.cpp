@@ -38,7 +38,7 @@ svg{width:100%;height:auto;display:block;}
 .tcard-lbl{color:#ffffff;font-size:18px;font-weight:900;letter-spacing:.4px;}
 .tcard-val{display:block;color:var(--amber);font-size:30px;font-weight:900;margin-top:2px;}
 #rowT1 .tcard-lbl{color:#ff6b5e;} #rowT1 .tcard-val{color:#ff6b5e;}
-.max-badge{position:absolute;top:8px;right:4px;background:#122a12;color:#2eff7a;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;border:1px solid #1f5a2e;}
+.max-badge{fill:#2eff7a;font-weight:700;font-family:var(--mono, monospace);}
 #rowT2 .tcard-lbl{color:#4fd6ff;} #rowT2 .tcard-val{color:#4fd6ff;}
 #rowTempObj .tcard-lbl{color:#ffb020;} #rowTempObj .tcard-val{color:#ffb020;}
 #rowTempDis .tcard-lbl{color:#c78bff;} #rowTempDis .tcard-val{color:#c78bff;}
@@ -220,7 +220,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
       <div class="cards">
         <div class="tcard clickable" id="rowT1">
-          <div class="max-badge" id="maxT1Badge">MÁX —</div>
           <div class="tcard-lbl">T1 JACUZZI</div>
           <b class="tcard-val" id="statT1">—</b>
           <div class="offset-ctrl" id="offsetT1Ctrl">
@@ -380,6 +379,7 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
   <!-- ===== CAPA DE TEXTOS: se pinta la última para quedar siempre por encima de tuberías y formas ===== -->
   <g id="textLayer">
+    <text x="102" y="480" text-anchor="middle" class="max-badge" id="maxT1Badge" font-size="10">MÁX —</text>
     <text x="102" y="492.5" text-anchor="middle" class="lbl">JACUZZI · 1 m³</text>
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
     <text x="54" y="594.5" text-anchor="middle" class="val" id="tempJacuzzi" font-size="14">— °C</text>
