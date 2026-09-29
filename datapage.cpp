@@ -60,31 +60,28 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 // retroalimentacion que revienta el limite de zoom y hace desaparecer
 // el canvas. overflow-x:auto NO basta por si solo en todos los
 // navegadores para forzarlo a 0.
-.chart-scroll{flex:1;min-height:0;min-width:0;background:#0d1512;border-radius:8px;position:relative;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:none;}
-.chart-scroll::-webkit-scrollbar{display:none;}
-.chart-scroll canvas{display:block;height:100%;}
-.zoom-hint{position:absolute;bottom:4px;right:8px;font-size:9px;color:var(--dim);background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;pointer-events:none;}
-
-.evt-marker{position:absolute;width:22px;height:22px;margin-left:-11px;margin-top:-11px;border-radius:50%;border:3px solid var(--amber);display:none;pointer-events:none;animation:evtPulse 1.4s ease-in-out infinite;}
-.evt-marker.show{display:block;}
-@keyframes evtPulse{
-  0%{ transform:scale(.8); opacity:1; }
-  50%{ transform:scale(1.35); opacity:.45; }
-  100%{ transform:scale(.8); opacity:1; }
-}
+/* La grafica YA NO usa scroll nativo: el canvas mide siempre lo mismo que su
+   contenedor y el zoom/desplazamiento se calculan en JS (drawDayChart y
+   attachInteractivity). touch-action:none deja todo el manejo tactil en
+   nuestras manos; cursor:grab indica que en PC se puede arrastrar. */
+.chart-scroll{flex:1;min-height:0;min-width:0;background:#0d1512;border-radius:8px;position:relative;overflow:hidden;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none;}
+.chart-scroll:active{cursor:grabbing;}
+.chart-scroll canvas{display:block;}
 
 .week-strip{flex:0 0 auto;display:flex;gap:4px;margin-top:4px;}
 .week-cell{flex:1;height:32px;border-radius:6px;background:#0d1512;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);font-weight:800;cursor:pointer;}
 .week-cell.today{border-color:var(--amber);color:var(--amber);}
 .week-cell.sel{background:var(--amber);color:#0b1210;border-color:var(--amber);}
 
-.legend{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-top:4px;justify-content:center;flex:0 0 auto;flex-wrap:wrap;}
-.legend span{display:inline-flex;align-items:center;gap:4px;}
+/* Siempre UNA sola fila: nowrap + tamaño que se adapta al ancho (10-12 px). */
+.legend{display:flex;gap:0 6px;font-size:clamp(10px,3.3vw,12px);color:var(--dim);margin-top:4px;width:100%;justify-content:space-between;flex:0 0 auto;flex-wrap:nowrap;white-space:nowrap;}
+.legend span{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;}
+.legend .dot{width:10px;height:10px;}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
 #emptyMsg{color:var(--dim);font-size:12px;text-align:center;padding:40px 10px;}
 
 /* ---- popup de detalle de evento ---- */
-.evt-overlay{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;z-index:10;border-radius:6px;}
+.evt-overlay{position:absolute;inset:0;background:transparent;display:none;align-items:flex-end;z-index:10;border-radius:6px;}
 .evt-overlay.show{display:flex;}
 .evt-card{width:100%;background:#101a17;border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:16px 16px 20px 16px;}
 .evt-card .handle{width:34px;height:4px;background:var(--line);border-radius:2px;margin:0 auto 12px auto;}
@@ -113,9 +110,8 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
     <div class="legend">
       <span><i class="dot" style="background:var(--water)"></i>T1 Jacuzzi</span>
       <span><i class="dot" style="background:var(--water-hot)"></i>T2 Solar</span>
-      <span><i class="dot" style="background:rgba(255,176,32,0.6)"></i>Horas de dia</span>
-      <span><i class="dot" style="background:rgba(0,100,200,0.6)"></i>Horas de noche</span>
-      <span><i class="dot" style="background:var(--amber)"></i>Toca un evento para ver detalle</span>
+      <span><i class="dot" style="background:rgba(255,176,32,0.6)"></i>Día</span>
+      <span><i class="dot" style="background:rgba(0,100,200,0.6)"></i>Noche</span>
     </div>
 
     <div class="evt-overlay" id="evtOverlay">
@@ -145,30 +141,128 @@ function stateOf(flags){ if(!(flags & 1)) return 0; return (flags & 4) ? 2 : 1; 
 let allSamples = [];   // muestras crudas [ts, t1, t2, flags] tal como llegan de /api/history
 let DAYS = [];         // agrupadas por dia local: [{key, date, samples:[ts,t1,t2,state]}]
 let TODAY_INDEX = 0;
-const pageStates = [];  // { zoom, evPts, canvas, scrollEl, marker, samples }
+const pageStates = [];  // { zoom, v0, panTarget, evPts, canvas, scrollEl, samples }
 
-// Limites de zoom: con el ancho tipico del panel (~530px) y el maximo de
-// pixeles por linea que aguantan sin problema todos los navegadores/
-// dispositivos con el devicePixelRatio mas alto habitual (3x en moviles),
-// ZOOM_MAX*530*3 se queda muy por debajo del limite de canvas de
-// cualquier navegador (~16000px), asi que es un rango seguro y de sobra
-// para ver el detalle de un dia completo.
+// Zoom de la grafica: 1 = dia completo; con ZOOM_MAX se ve un tramo de
+// (dia / ZOOM_MAX). Ya no hay canvas gigante ni scroll nativo: el canvas
+// mide siempre lo mismo que su contenedor y solo se dibuja el tramo
+// visible (ver drawDayChart), asi que no hay limite de pixeles.
 const ZOOM_MIN = 1, ZOOM_MAX = 4;
 
-// Limite absoluto en px del ancho del canvas: pase lo que pase con el
-// ancho del contenedor (distintas pantallas) o con el bucle de
-// realimentacion, el canvas nunca crece mas alla de esto.
-const MAX_CANVAS_W = 3951;
+// Margenes izquierdo/derecho del area de dibujo (px CSS). Los comparten el
+// dibujo y los gestos para convertir pixeles <-> tiempo con la misma formula.
+const CH_PAD_L = 34, CH_PAD_R = 8;
+
+// Ubicacion (Torrevieja) para calcular amanecer/atardecer. Latitud norte
+// positiva; longitud este positiva (oeste negativa).
+const SUN_LAT = 37.9787, SUN_LON = -0.6822;
 
 // Fuerza SIEMPRE el zoom a quedar dentro de [ZOOM_MIN, ZOOM_MAX], sin
 // importar de donde venga el valor. Si por lo que sea llega NaN o
-// Infinity (p.ej. un calculo intermedio corrupto), Math.min/Math.max
-// con NaN devuelven NaN y el zoom quedaria roto para siempre (el
-// canvas se queda con ancho "NaNpx" y desaparece) - por eso el
-// Number.isFinite de aqui es imprescindible, no cosmetico.
+// Infinity, Math.min/Math.max con NaN devuelven NaN y el zoom quedaria
+// roto para siempre - por eso el Number.isFinite es imprescindible.
 function clampZoom(z){
   if(!Number.isFinite(z)) return ZOOM_MIN;
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
+
+// ---- Vista de la grafica (zoom + desplazamiento) ----
+// Cada dia guarda "zoom" (1 = dia completo) y "v0" (instante UNIX, en
+// segundos, del borde izquierdo visible). El tramo visible dura
+// (duracion del dia / zoom) y siempre queda dentro de las muestras.
+
+// Rango [t0,t1] de las muestras de un dia (t1 > t0 siempre).
+function dayRange(st){
+  const t0 = st.samples[0][0];
+  const t1 = Math.max(st.samples[st.samples.length-1][0], t0+1);
+  return [t0, t1];
+}
+
+// Deja zoom y v0 dentro de limites validos (v0 NaN/undefined -> inicio).
+function clampView(st){
+  st.zoom = clampZoom(st.zoom);
+  if(!st.samples || st.samples.length < 2){ st.v0 = 0; return; }
+  const r = dayRange(st);
+  const span = (r[1]-r[0]) / st.zoom;
+  const v0 = Number.isFinite(st.v0) ? st.v0 : r[0];
+  st.v0 = Math.min(Math.max(v0, r[0]), r[1]-span);
+}
+
+// Ancho util (px) del area de dibujo de un canvas de ancho "canvasW".
+function plotWidth(canvasW){ return Math.max(1, canvasW - CH_PAD_L - CH_PAD_R); }
+
+// Cambia el zoom manteniendo fijo el instante que hay bajo la posicion "mx"
+// (px dentro del canvas): el punto bajo el cursor/dedos no se mueve.
+function zoomAt(st, mx, newZoom, canvasW){
+  clampView(st);
+  const r = dayRange(st), full = r[1]-r[0];
+  const frac = Math.min(1, Math.max(0, (mx - CH_PAD_L) / plotWidth(canvasW)));
+  const tAt = st.v0 + frac * (full / st.zoom);   // instante bajo "mx"
+  st.zoom = clampZoom(newZoom);
+  st.v0 = tAt - frac * (full / st.zoom);
+  clampView(st);
+}
+
+// Desplaza la vista "dxPx" pixeles (positivo = el contenido va hacia la derecha).
+function panBy(st, dxPx, canvasW){
+  clampView(st);
+  const r = dayRange(st);
+  const span = (r[1]-r[0]) / st.zoom;
+  st.v0 -= dxPx / plotWidth(canvasW) * span;
+  clampView(st);
+}
+
+// ---- Sol: amanecer / atardecer sin internet ----
+// Elevacion del sol (grados sobre el horizonte) en el instante UNIX "tsSec"
+// (segundos) para una latitud/longitud dadas. Formulas astronomicas
+// simplificadas de NOAA (precision ~1 minuto, de sobra para sombrear la
+// grafica). Amanecer/atardecer = elevacion -0.833 (radio solar + refraccion).
+function solarElevation(tsSec, latDeg, lonDeg){
+  const rad = Math.PI/180;
+  const jd = tsSec/86400 + 2440587.5;                 // dia juliano
+  const T = (jd - 2451545.0)/36525.0;                 // siglos desde J2000
+  const L0 = (280.46646 + T*(36000.76983 + T*0.0003032)) % 360;  // long. media
+  const M = 357.52911 + T*(35999.05029 - 0.0001537*T);           // anomalia media
+  const ecc = 0.016708634 - T*(0.000042037 + 0.0000001267*T);    // excentricidad
+  const Mr = M*rad;
+  const C = Math.sin(Mr)*(1.914602 - T*(0.004817 + 0.000014*T))
+          + Math.sin(2*Mr)*(0.019993 - 0.000101*T)
+          + Math.sin(3*Mr)*0.000289;                             // ecuacion del centro
+  const omega = 125.04 - 1934.136*T;
+  const lambda = L0 + C - 0.00569 - 0.00478*Math.sin(omega*rad); // long. aparente
+  const eps = 23.439291 - 0.0130042*T + 0.00256*Math.cos(omega*rad); // oblicuidad
+  const decl = Math.asin(Math.sin(eps*rad)*Math.sin(lambda*rad));    // declinacion
+  const yv = Math.tan(eps*rad/2), y2 = yv*yv;
+  const L0r = L0*rad;
+  const eqTime = 4/rad * (y2*Math.sin(2*L0r) - 2*ecc*Math.sin(Mr)
+      + 4*ecc*y2*Math.sin(Mr)*Math.cos(2*L0r) - 0.5*y2*y2*Math.sin(4*L0r)
+      - 1.25*ecc*ecc*Math.sin(2*Mr));                            // ecuacion del tiempo (min)
+  const minUTC = ((jd + 0.5) % 1) * 1440;                        // minutos desde 00:00 UTC
+  const tst = (minUTC + eqTime + 4*lonDeg + 1440) % 1440;        // hora solar verdadera (min)
+  const ha = (tst/4 - 180) * rad;                                // angulo horario
+  const lat = latDeg*rad;
+  return Math.asin(Math.sin(lat)*Math.sin(decl) + Math.cos(lat)*Math.cos(decl)*Math.cos(ha)) / rad;
+}
+
+// Color de fondo (RGBA) del cielo segun la elevacion del sol: azul de noche,
+// naranja en el amanecer/atardecer (sol en el horizonte) y ambar suave de
+// dia. Entre los puntos se interpola: es el degradado del crepusculo.
+const SKY_STOPS = [
+  { e: -12,    c: [0, 100, 200, 0.14] },    // noche
+  { e: -0.833, c: [255, 120, 40, 0.18] },   // amanecer / atardecer
+  { e: 6,      c: [255, 176, 32, 0.08] }    // dia
+];
+function skyColor(elev){
+  const S = SKY_STOPS;
+  if(elev <= S[0].e) return S[0].c;
+  if(elev >= S[S.length-1].e) return S[S.length-1].c;
+  for(let k=0; k<S.length-1; k++){
+    if(elev <= S[k+1].e){
+      const f = (elev - S[k].e) / (S[k+1].e - S[k].e);
+      return S[k].c.map((v,j)=> v + (S[k+1].c[j]-v)*f);
+    }
+  }
+  return S[S.length-1].c;
 }
 
 // Evento actualmente abierto en el popup de detalle (indice de dia/pagina
@@ -183,10 +277,10 @@ async function loadData(){
   // reconstruir. Sin esto, cada refresco automatico (cada 60s) devolvia
   // el zoom a ZOOM_MIN y saltaba al dia de hoy sin avisar, cortando
   // cualquier gesto de zoom en curso.
-  const zoomByKey = {};
+  const viewByKey = {};
   let visibleDayKey = null;
   if(pageStates.length > 0){
-    DAYS.forEach((day,i)=>{ zoomByKey[day.key] = pageStates[i].zoom; });
+    DAYS.forEach((day,i)=>{ viewByKey[day.key] = { zoom: pageStates[i].zoom, v0: pageStates[i].v0 }; });
     const pager = document.getElementById('pager');
     const idx = Math.round(pager.scrollLeft / (pager.clientWidth || 1));
     if(DAYS[idx]) visibleDayKey = DAYS[idx].key;
@@ -200,7 +294,7 @@ async function loadData(){
     allSamples = [];
   }
   buildDays();
-  buildUI(zoomByKey, visibleDayKey);
+  buildUI(viewByKey, visibleDayKey);
 }
 
 function dayKey(d){ return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate(); }
@@ -295,11 +389,17 @@ function donutSVG(pct,color,size){
     'stroke-dasharray="'+c+'" stroke-dashoffset="'+(c*(1-pct))+'" stroke-linecap="round" transform="rotate(-90 '+cx+' '+cy+')"/></svg>';
 }
 
-// Dibuja la grafica de un dia con ancho total = anchoContenedor*zoom (permite scroll horizontal).
-// Devuelve los puntos de evento (coordenadas CSS px) para detectar toques sobre ellos.
-function drawDayChart(canvas, containerW, containerH, zoom, samples){
+// Dibuja la grafica de un dia. El canvas mide siempre lo mismo que su
+// contenedor; solo se dibuja el tramo visible [st.v0, st.v0+dia/zoom].
+// "markerIdx" = indice (en la lista de eventos devuelta) del evento
+// seleccionado, que se marca con un circulo amarillo dibujado con las
+// mismas coordenadas que su punto (o -1 si no hay ninguno).
+// Devuelve TODOS los eventos (x,y en px CSS del canvas, aunque esten fuera
+// de la vista) para detectar toques y navegar entre ellos.
+function drawDayChart(canvas, containerW, containerH, st, markerIdx){
+  const samples = st.samples;
   const dpr = window.devicePixelRatio || 1;
-  const W = Math.min(containerW*zoom, MAX_CANVAS_W), H = containerH;
+  const W = Math.max(1, Math.floor(containerW)), H = containerH;
   canvas.style.width = W+'px'; canvas.style.height = H+'px';
   canvas.width = W*dpr; canvas.height = H*dpr;
   const ctx = canvas.getContext('2d');
@@ -308,67 +408,66 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
   if(samples.length < 2) return [];
 
   // bandH/bandGap: franja de estado (SOLAR/FILTRO/PARADO) separada de la
-  // curva, con su propia altura para que se aprecie bien (antes iba
-  // pegada dentro de la curva con solo 6px y no se distinguia).
-  const padL=32, padR=8, padT=8, padB=20, bandH=14, bandGap=5;
+  // curva, con su propia altura para que se aprecie bien.
+  const padL=CH_PAD_L, padR=CH_PAD_R, padT=8, padB=20, bandH=14, bandGap=5;
   const plotW=W-padL-padR, plotH=H-padT-padB-bandH-bandGap;
-  const tMin=samples[0][0], tMax=samples[samples.length-1][0];
+  clampView(st);
+  const rng = dayRange(st);
+  const span = (rng[1]-rng[0]) / st.zoom;
+  const v0 = st.v0, v1 = v0 + span;              // tramo visible
+  // Escala vertical fija para todo el dia (no salta al desplazarse)
   let vMin=Infinity,vMax=-Infinity;
   samples.forEach(s=>{ vMin=Math.min(vMin,s[1],s[2]); vMax=Math.max(vMax,s[1],s[2]); });
   vMin=Math.floor(vMin-1); vMax=Math.ceil(vMax+1);
   if(vMax-vMin < 4){ vMax+=2; vMin-=2; }
-  const xOf=ts=>padL+(ts-tMin)/(tMax-tMin)*plotW;
+  const xOf=ts=>padL+(ts-v0)/span*plotW;
   const yOf=v=>padT+plotH-(v-vMin)/(vMax-vMin)*plotH;
 
-  // Bandas de fondo dia/noche: rango de luz solar asumido 08:00-20:00
-  // (mismo rango que se usa mas abajo para las horas en blanco).
-  // DAYLIGHT_START/END se declaran aqui arriba (antes solo existian mas
-  // abajo, junto a las marcas de hora) porque esta banda necesita
-  // pintarse ANTES que rejilla y curvas para quedar detras de todo.
-  const DAYLIGHT_START = 8, DAYLIGHT_END = 20;
-  const dayStart0 = new Date(tMin*1000); dayStart0.setHours(0,0,0,0);
-  const bandStartTs = dayStart0.getTime()/1000;
-  for(let hh=0; hh<24; hh++){
-    const segStart = bandStartTs + hh*3600, segEnd = segStart+3600;
-    if(segEnd < tMin || segStart > tMax) continue;
-    const x1 = xOf(Math.max(segStart,tMin)), x2 = xOf(Math.min(segEnd,tMax));
-    const isDaylight = hh >= DAYLIGHT_START && hh < DAYLIGHT_END;
-    ctx.fillStyle = isDaylight ? 'rgba(255,176,32,0.08)' : 'rgba(0,100,200,0.14)';
-    ctx.fillRect(x1, padT, Math.max(x2-x1,1), H-padT-padB);
+  // Todo lo que sigue se recorta al area de dibujo (al desplazar/zoom
+  // parte de las curvas queda fuera de la vista).
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL,0,plotW,H); ctx.clip();
+
+  // Fondo del cielo: degradado noche -> amanecer -> dia -> atardecer -> noche
+  // segun la elevacion real del sol en Torrevieja (columnas de 3 px).
+  const SKY_STEP = 3;
+  for(let x=padL; x<padL+plotW; x+=SKY_STEP){
+    const w = Math.min(SKY_STEP, padL+plotW-x);
+    const ts = v0 + (x + w/2 - padL)/plotW*span;
+    const c = skyColor(solarElevation(ts, SUN_LAT, SUN_LON));
+    ctx.fillStyle = 'rgba('+Math.round(c[0])+','+Math.round(c[1])+','+Math.round(c[2])+','+c[3].toFixed(3)+')';
+    ctx.fillRect(x, padT, w, H-padT-padB);
   }
 
-  ctx.strokeStyle='#1b2622'; ctx.fillStyle='#9db3a6'; ctx.font='9px monospace'; ctx.lineWidth=1;
+  ctx.strokeStyle='#1b2622'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
-    const v=vMin+(vMax-vMin)*i/4, y=yOf(v);
+    const y=yOf(vMin+(vMax-vMin)*i/4);
     ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
-    ctx.fillText(v.toFixed(0)+'°',3,y+3);
   }
+
   const bandY = padT+plotH+bandGap;
-  // Marcas de hora cada 2h (fijo, ya no depende del zoom). Las horas
-  // dentro del rango de luz solar se pintan en blanco puro para
-  // distinguirlas a golpe de vista; el resto en el tono atenuado
-  // habitual. Rango de luz asumido 08:00-20:00 (ajustable aqui si
-  // se prefiere calcularlo por fecha/estacion).
+  // Marcas de hora cada 2h. Las horas con el sol sobre el horizonte se
+  // pintan en blanco; el resto en azul suave.
   const HOURS_STEP = 2;
-  const dayStart = new Date(tMin*1000); dayStart.setHours(0,0,0,0);
-  ctx.setLineDash([2,3]); // lineas de hora punteadas (antes solidas, se confundian con la rejilla)
+  const dayStart = new Date(rng[0]*1000); dayStart.setHours(0,0,0,0);
+  const hourMarks = [];
+  ctx.setLineDash([2,3]); // lineas de hora punteadas
   for(let hh=0; hh<=24; hh+=HOURS_STEP){
     const ts = dayStart.getTime()/1000 + hh*3600;
-    if(ts < tMin || ts > tMax) continue;
+    if(ts < v0 || ts > v1) continue;
     const x = xOf(ts);
-    const isDaylight = hh >= DAYLIGHT_START && hh <= DAYLIGHT_END;
+    const isDaylight = solarElevation(ts, SUN_LAT, SUN_LON) > -0.833;
     ctx.strokeStyle = isDaylight ? '#ffffff' : '#7fb8ff';
     ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,bandY+bandH); ctx.stroke();
-    ctx.fillStyle = isDaylight ? '#ffffff' : '#9db3a6';
-    ctx.fillText(hh.toString().padStart(2,'0')+':00', x-12, H-6);
+    hourMarks.push({ x:x, hh:hh, isDaylight:isDaylight });
   }
   ctx.setLineDash([]);
 
-  // Franja de estado: separada de la curva y mas alta (bandH) para que
-  // se distinga bien de un vistazo, con un borde tenue para marcar sus
-  // limites.
+  // Franja de estado: separada de la curva y mas alta (bandH), con un
+  // borde tenue para marcar sus limites.
   for(let i=0;i<samples.length-1;i++){
     const x1=xOf(samples[i][0]),x2=xOf(samples[i+1][0]);
+    if(x2 < padL || x1 > W-padR) continue;
     ctx.fillStyle=STATE_COLOR[samples[i][3]];
     ctx.fillRect(x1,bandY,Math.max(x2-x1,1),bandH);
   }
@@ -394,11 +493,42 @@ function drawDayChart(canvas, containerW, containerH, zoom, samples){
       prevState=s[3]; prevTs=s[0];
     }
   });
+  ctx.restore();
+
+  // Etiquetas fuera del recorte: grados a la izquierda (12 px monoespaciada)
+  // y horas abajo (11 px, fuente fina sans-serif para que se lean bien).
+  ctx.fillStyle='#9db3a6'; ctx.font='12px monospace';
+  for(let i=0;i<=4;i++){
+    const v=vMin+(vMax-vMin)*i/4;
+    ctx.fillText(v.toFixed(0)+'°',3,yOf(v)+4);
+  }
+  ctx.font='300 11px system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+  ctx.textAlign='center';
+  hourMarks.forEach(m=>{
+    ctx.fillStyle = m.isDaylight ? '#ffffff' : '#9db3a6';
+    // centrada en la marca, sin salirse del canvas por los extremos
+    const lx = Math.min(W-14, Math.max(14, m.x));
+    ctx.fillText(m.hh.toString().padStart(2,'0')+':00', lx, H-6);
+  });
+  ctx.textAlign='left';
+
+  // Circulo amarillo "respirando" sobre el evento seleccionado: se dibuja
+  // aqui, con las mismas coordenadas que el punto, asi no puede descolocarse.
+  if(markerIdx >= 0 && evPts[markerIdx]){
+    const p = evPts[markerIdx];
+    if(p.x >= padL && p.x <= W-padR){
+      const k = 0.5 - 0.5*Math.cos(2*Math.PI*(performance.now()/1400));
+      ctx.globalAlpha = 1 - 0.55*k;
+      ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 11*(0.8+0.55*k), 0, Math.PI*2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
   return evPts;
 }
 
-function buildUI(zoomByKey, visibleDayKey){
-  zoomByKey = zoomByKey || {};
+function buildUI(viewByKey, visibleDayKey){
+  viewByKey = viewByKey || {};
   const pager = document.getElementById('pager');
   const weekStrip = document.getElementById('weekStrip');
   pager.innerHTML = '';
@@ -437,9 +567,10 @@ function buildUI(zoomByKey, visibleDayKey){
         '<div class="donut-box">'+donutSVG(descargasPct,'#ffb020',44)+'<div class="val">DESCARGAS<br><b>'+res.descargas+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(bonusPct,bonusColor,44)+'<div class="val">BONUS TÉRMICO<br><b class="'+bonusClass+'">'+bonusTxt+'</b></div></div>'+
       '</div>'+
-      '<div class="chart-scroll"><canvas></canvas><div class="evt-marker"></div><div class="zoom-hint">pellizca / rueda: zoom (centrado en el cursor) · doble-toque: reset</div></div>';
+      '<div class="chart-scroll"><canvas></canvas></div>';
     pager.appendChild(page);
-    pageStates.push({ zoom: clampZoom(zoomByKey[day.key] !== undefined ? zoomByKey[day.key] : ZOOM_MIN), evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), marker: page.querySelector('.evt-marker'), samples: day.samples });
+    const savedView = viewByKey[day.key] || {};
+    pageStates.push({ zoom: clampZoom(savedView.zoom !== undefined ? savedView.zoom : ZOOM_MIN), v0: savedView.v0, panTarget: null, evPts:[], canvas: page.querySelector('canvas'), scrollEl: page.querySelector('.chart-scroll'), samples: day.samples });
 
     // La grafica se quedaba mas baja de lo disponible porque el alto
     // del canvas se fijaba una sola vez (redraw inicial via rAF) y no
@@ -525,8 +656,7 @@ function redrawPage(i){
   const h = computeChartHeight(page, st.scrollEl);
   st.scrollEl.style.height = h+'px';
   const rect = st.scrollEl.getBoundingClientRect();
-  st.evPts = drawDayChart(st.canvas, rect.width, h, st.zoom, st.samples);
-  if(i===curEvtPage) positionMarker(i);
+  st.evPts = drawDayChart(st.canvas, rect.width, h, st, i===curEvtPage ? curEvtIndex : -1);
 }
 function redrawAll(){ pageStates.forEach((_,i)=>redrawPage(i)); }
 
@@ -539,157 +669,151 @@ function attachInteractivity(){
     updateWeekSel(idx);
   };
 
-  function touchDist(t0,t1){
-    return Math.hypot(t0.clientX-t1.clientX, t0.clientY-t1.clientY);
-  }
-
+  // Gestos unificados con Pointer Events (raton y tactil), sin scroll nativo:
+  //  - 1 puntero: arrastrar = desplazar; toque corto = seleccionar evento
+  //  - 2 punteros: pellizco = zoom centrado entre los dedos (y desplaza)
+  //  - rueda: zoom centrado en el cursor; rueda horizontal = desplazar
+  //  - doble toque (solo tactil): alterna zoom 1 <-> 2.6
+  // Un pellizco NUNCA cuenta como toque ni como doble toque (antes, al
+  // soltar los dos dedos saltaban dos touchend seguidos y el codigo de
+  // doble toque reseteaba el zoom).
   pageStates.forEach((st,i)=>{
-    let pinchStartDist = null, pinchStartZoom = 1;
-    let panStartX = null, panStartScroll = 0;
+    const el = st.scrollEl;
+    const ptrs = new Map();             // pointerId -> {x,y} posicion actual
+    let pinchDist = 0, pinchZoom = 1;   // estado inicial del pellizco
+    let downX = 0, downY = 0, downT = 0;
+    let moved = false, multi = false;   // hubo arrastre / hubo 2 dedos en este gesto
+    let lastTapT = 0, lastTapX = 0, lastTapY = 0;
     let rafPending = false;
-    let lastTapTime = 0;
 
     function scheduleRedraw(){
       if(rafPending) return;
       rafPending = true;
-      requestAnimationFrame(()=>{ redrawPage(i); rafPending=false; });
+      requestAnimationFrame(()=>{ rafPending = false; redrawPage(i); });
     }
+    function canvasRect(){ return st.canvas.getBoundingClientRect(); }
 
-    st.scrollEl.addEventListener('touchstart', e=>{
-      if(e.touches.length===2){
-        pinchStartDist = touchDist(e.touches[0], e.touches[1]);
-        pinchStartZoom = st.zoom;
-        panStartX = null;
-      } else if(e.touches.length===1){
-        panStartX = e.touches[0].clientX;
-        panStartScroll = st.scrollEl.scrollLeft;
+    el.addEventListener('pointerdown', e=>{
+      if(e.pointerType === 'mouse' && e.button !== 0) return;
+      st.panTarget = null;                       // el usuario toma el control
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+      ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+      if(ptrs.size === 1){
+        downX = e.clientX; downY = e.clientY; downT = Date.now();
+        moved = false; multi = false;
+      } else if(ptrs.size === 2){
+        const p = [...ptrs.values()];
+        pinchDist = Math.hypot(p[0].x-p[1].x, p[0].y-p[1].y) || 1;
+        pinchZoom = st.zoom;
+        multi = true;
       }
-    }, {passive:true});
-
-    // El viewport ya bloquea el zoom nativo del navegador (ver <meta>),
-    // asi que aqui es el unico que hace zoom: nada compite contra
-    // nosotros y no se dispara sin control. Ademas suavizamos el valor
-    // objetivo con un factor de 0.35 en vez de saltar de golpe al valor
-    // calculado, para que el pellizco sea fino y progresivo.
-    // touch-action:none deja TODO el manejo tactil en nuestras manos
-    // (antes 'pan-x' no bastaba: varios navegadores moviles seguian
-    // reconociendo el pellizco de 2 dedos como zoom nativo de la
-    // pagina, sin limite y sin forma de deshacerlo). Por eso aqui
-    // tambien reimplementamos a mano el paneo de 1 dedo, que antes
-    // daba el navegador gratis con 'pan-x'.
-    st.scrollEl.addEventListener('touchmove', e=>{
-      if(e.touches.length===2){
-        if(!pinchStartDist){
-          pinchStartDist = touchDist(e.touches[0], e.touches[1]);
-          pinchStartZoom = st.zoom;
-          e.preventDefault();
-          return;
-        }
-        const dist = touchDist(e.touches[0], e.touches[1]);
-        const target = clampZoom(pinchStartZoom * (dist / pinchStartDist));
-        st.zoom = clampZoom(st.zoom + (target - st.zoom) * 0.35);
-        e.preventDefault();
-        scheduleRedraw();
-      } else if(e.touches.length===1 && panStartX !== null){
-        const dx = e.touches[0].clientX - panStartX;
-        st.scrollEl.scrollLeft = panStartScroll - dx;
-        e.preventDefault();
-      }
-    }, {passive:false});
-
-    st.scrollEl.addEventListener('touchend', e=>{
-      if(e.touches.length<2) pinchStartDist = null;
-      if(e.touches.length<1) panStartX = null;
     });
 
-    // Zoom con la rueda del raton en PC, anclado a la posicion del cursor:
-    // se calcula que punto del contenido esta bajo el raton ANTES de
-    // cambiar el zoom, y despues se ajusta el scroll para que ese mismo
-    // punto se quede bajo el cursor (si no, al hacer zoom out el punto
-    // "se escapa" hacia la izquierda y parece que no ha pasado nada).
-    //
-    // IMPORTANTE: un trackpad genera eventos 'wheel' tanto al hacer
-    // scroll horizontal (paneo, moviendo sobre todo deltaX) como al
-    // hacer scroll vertical (deltaY). El bug real era que CUALQUIER
-    // deltaY<=0 (incluido 0, que es lo habitual en un swipe horizontal)
-    // se interpretaba como "zoom in", asi que un simple intento de
-    // desplazar la grafica terminaba siempre ampliando sin parar, y el
-    // zoom-out (que exige deltaY>0 "puro") casi nunca se disparaba.
-    // Ahora solo zoomeamos cuando el gesto es predominantemente
-    // vertical; si es mas horizontal que vertical, dejamos que sea un
-    // paneo normal (scroll nativo de .chart-scroll).
-    st.scrollEl.addEventListener('wheel', e=>{
-      // Antes se exigia deltaY estrictamente mayor que deltaX para
-      // zoomear, y en trackpads el zoom-out (deltaY>0 "puro") casi
-      // nunca ganaba a deltaX -> se interpretaba como paneo y el
-      // zoom-out no se disparaba nunca. Damos margen a deltaY con
-      // un factor 1.5 para que gestos casi-verticales sigan siendo zoom.
-      if(Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.5){
-        return; // gesto claramente horizontal: paneo nativo, no tocar el zoom
+    el.addEventListener('pointermove', e=>{
+      const p = ptrs.get(e.pointerId);
+      if(!p) return;
+      const rect = canvasRect();
+      if(ptrs.size === 1){
+        // Umbral de 6 px: por debajo sigue siendo un toque, no un arrastre
+        if(!moved && Math.hypot(e.clientX-downX, e.clientY-downY) < 6) return;
+        moved = true;
+        panBy(st, e.clientX - p.x, rect.width);
+        p.x = e.clientX; p.y = e.clientY;
+      } else if(ptrs.size === 2){
+        const a = [...ptrs.values()];
+        const prevMid = (a[0].x + a[1].x) / 2;
+        p.x = e.clientX; p.y = e.clientY;
+        const b = [...ptrs.values()];
+        const dist = Math.hypot(b[0].x-b[1].x, b[0].y-b[1].y) || 1;
+        const mid = (b[0].x + b[1].x) / 2;
+        moved = true;
+        zoomAt(st, mid - rect.left, pinchZoom * dist / pinchDist, rect.width);
+        panBy(st, mid - prevMid, rect.width);
+      } else {
+        return;
       }
-      e.preventDefault();
-      const rect = st.scrollEl.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left;
-      const contentX = st.scrollEl.scrollLeft + cursorX; // punto bajo el cursor, en coords. del canvas
+      scheduleRedraw();
+    });
 
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = clampZoom(st.zoom * factor);
-      const ratio = newZoom / st.zoom;
-      st.zoom = newZoom;
-      redrawPage(i);
-
-      const maxScroll = Math.max(0, st.scrollEl.scrollWidth - rect.width);
-      st.scrollEl.scrollLeft = Math.max(0, Math.min(contentX*ratio - cursorX, maxScroll));
-    }, {passive:false});
-
-    st.canvas.addEventListener('touchend', e=>{
+    // Doble toque (tactil) y seleccion del evento mas cercano al toque.
+    function handleTap(e){
+      const rect = canvasRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const now = Date.now();
-      if(now - lastTapTime < 300){
-        st.zoom = st.zoom>1.5 ? ZOOM_MIN : clampZoom(2.6);
-        redrawPage(i);
-        e.preventDefault();
+      if(e.pointerType === 'touch' && now - lastTapT < 300 &&
+         Math.hypot(e.clientX-lastTapX, e.clientY-lastTapY) < 30){
+        lastTapT = 0;
+        zoomAt(st, mx, st.zoom > 1.5 ? ZOOM_MIN : 2.6, rect.width);
+        scheduleRedraw();
+        return;
       }
-      lastTapTime = now;
-    });
-
-    function handleTap(clientX, clientY){
-      const rect = st.canvas.getBoundingClientRect();
-      const mx = clientX - rect.left, my = clientY - rect.top;
-      let bestIdx = -1, bestDist = 20;
+      lastTapT = now; lastTapX = e.clientX; lastTapY = e.clientY;
+      const reach = (e.pointerType === 'touch') ? 28 : 20;
+      let best = -1, bestD = reach;
       st.evPts.forEach((p,idx)=>{
+        if(p.x < CH_PAD_L || p.x > rect.width - CH_PAD_R) return;  // fuera de la vista
         const d = Math.hypot(p.x-mx, p.y-my);
-        if(d<bestDist){ bestDist=d; bestIdx=idx; }
+        if(d < bestD){ bestD = d; best = idx; }
       });
-      if(bestIdx>=0) openEvt(i, bestIdx);
+      if(best >= 0) openEvt(i, best);
     }
-    st.canvas.addEventListener('click', e=> handleTap(e.clientX, e.clientY));
+
+    function endPointer(e){
+      if(!ptrs.has(e.pointerId)) return;
+      const wasTap = (e.type === 'pointerup' && ptrs.size === 1 && !multi && !moved &&
+                      Date.now() - downT < 500);
+      ptrs.delete(e.pointerId);
+      if(ptrs.size < 2) pinchDist = 0;
+      if(wasTap) handleTap(e);
+    }
+    el.addEventListener('pointerup', endPointer);
+    el.addEventListener('pointercancel', endPointer);
+
+    el.addEventListener('wheel', e=>{
+      e.preventDefault();
+      st.panTarget = null;
+      const rect = canvasRect();
+      const dx = e.deltaMode === 1 ? e.deltaX*16 : e.deltaX;   // lineas -> px (Firefox)
+      if(Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.5){
+        panBy(st, -dx, rect.width);                           // gesto horizontal: desplazar
+      } else {
+        zoomAt(st, e.clientX - rect.left, st.zoom * (e.deltaY > 0 ? 0.9 : 1.1), rect.width);
+      }
+      scheduleRedraw();
+    }, {passive:false});
   });
 }
 
-// Mueve el circulo amarillo de "respiracion" sobre el punto del evento
-// actualmente abierto en la pagina "pageIdx". Se usa tanto al abrir/
-// navegar entre eventos como al redibujar por zoom/scroll/resize.
-function positionMarker(pageIdx){
-  const st = pageStates[pageIdx];
-  const p = st.evPts[curEvtIndex];
-  if(!p){ st.marker.classList.remove('show'); return; }
-  st.marker.style.left = p.x+'px';
-  st.marker.style.top  = p.y+'px';
-  st.marker.classList.add('show');
+// Animacion del circulo amarillo y del centrado suave sobre el evento
+// abierto. Mientras el popup de detalle esta abierto (curEvtPage >= 0) se
+// redibuja su pagina en cada fotograma; al cerrarlo el bucle se detiene.
+let markerRaf = 0;
+function markerLoop(){
+  markerRaf = 0;
+  if(curEvtPage < 0) return;
+  const st = pageStates[curEvtPage];
+  if(st){
+    clampView(st);
+    if(st.panTarget !== null){
+      const d = st.panTarget - st.v0;
+      if(Math.abs(d) < 1){ st.v0 = st.panTarget; st.panTarget = null; }
+      else st.v0 += d*0.25;
+    }
+    redrawPage(curEvtPage);
+  }
+  markerRaf = requestAnimationFrame(markerLoop);
 }
-// Centra horizontalmente la vista (scroll del contenedor) en el punto
-// "x" del evento, para que no se pierda de vista si hay zoom aplicado
-// (con zoom alto, un evento fuera del tramo visible no se ve aunque el
-// marcador este correctamente colocado en sus coordenadas).
-function centerViewOn(pageIdx, x){
-  const st = pageStates[pageIdx];
-  const rect = st.scrollEl.getBoundingClientRect();
-  const maxScroll = Math.max(0, st.scrollEl.scrollWidth - rect.width);
-  const target = Math.max(0, Math.min(x - rect.width/2, maxScroll));
-  st.scrollEl.scrollTo({ left: target, behavior: 'smooth' });
+function startMarkerLoop(){
+  if(!markerRaf) markerRaf = requestAnimationFrame(markerLoop);
 }
-function hideAllMarkers(){
-  pageStates.forEach(st=> st.marker.classList.remove('show'));
+
+// Centra la vista (con animacion suave) en el instante "ts" del evento, para
+// que no se pierda de vista si hay zoom aplicado.
+function centerViewOn(pageIdx, ts){
+  const st = pageStates[pageIdx];
+  const r = dayRange(st);
+  const span = (r[1]-r[0]) / st.zoom;
+  st.panTarget = Math.min(Math.max(ts - span/2, r[0]), r[1]-span);
 }
 
 // pageIdx: indice del dia (pagina) al que pertenece el evento.
@@ -698,10 +822,11 @@ function openEvt(pageIdx, evtIdx){
   const st = pageStates[pageIdx];
   const evPt = st.evPts[evtIdx];
   if(!evPt) return;
-  hideAllMarkers();
+  const prevPage = curEvtPage;
   curEvtPage = pageIdx; curEvtIndex = evtIdx;
-  positionMarker(pageIdx);
-  centerViewOn(pageIdx, evPt.x);
+  if(prevPage >= 0 && prevPage !== pageIdx) redrawPage(prevPage);  // borra el marcador anterior
+  centerViewOn(pageIdx, evPt.sample[0]);
+  startMarkerLoop();
 
   const s = evPt.sample;
   const d = new Date(s[0]*1000);
@@ -725,8 +850,9 @@ function openEvt(pageIdx, evtIdx){
 }
 function closeEvt(){
   document.getElementById('evtOverlay').classList.remove('show');
-  hideAllMarkers();
+  const prevPage = curEvtPage;
   curEvtPage = -1; curEvtIndex = -1;
+  if(prevPage >= 0 && pageStates[prevPage]) redrawPage(prevPage);   // quita el marcador
 }
 function navEvt(dir){
   if(curEvtPage<0) return;
