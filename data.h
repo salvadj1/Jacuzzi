@@ -37,7 +37,8 @@ struct SystemState {
 
   // --- Logica de descarga del serpentin (modo automatico) ---
   bool dischargeActive        = false; // true mientras se esta forzando solar para descargar el serpentin
-  unsigned long dischargeUntil = 0;    // millis() en el que termina la ventana de descarga de 5 min
+  unsigned long dischargeUntil = 0;    // millis() en el que termina la ventana de descarga
+  uint8_t dischargeMinutes = 5;        // Duracion de la ventana de descarga en minutos (ajustable, persistente)
   ScheduleProgram schedule;  // Programa de filtracion configurado
 
   bool valvesLocked = false; // true mientras las valvulas estan girando (bloquea comandos)

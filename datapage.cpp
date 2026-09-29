@@ -38,12 +38,10 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .day-pager::-webkit-scrollbar{display:none;}
 .day-page{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;min-height:0;min-width:0;padding:0 2px;}
 
-.day-hdr{flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;}
-.day-hdr .name{font-size:13px;font-weight:900;color:#fff;letter-spacing:.5px;}
-.day-hdr .today-badge{font-size:10px;color:#0b1210;background:var(--amber);padding:3px 8px;border-radius:8px;font-weight:900;}
-.day-hdr .right{display:flex;gap:6px;align-items:center;}
-.btn-del-dia{font-size:10px;color:var(--red);background:transparent;border:1px solid var(--line);padding:4px 8px;border-radius:6px;cursor:pointer;font-family:var(--mono);}
-.btn-del-dia:hover{border-color:var(--red);}
+.day-row{flex:0 0 auto;display:flex;align-items:center;gap:6px;flex-wrap:nowrap;margin-bottom:6px;}
+.day-row .name{flex:0 0 auto;font-size:13px;font-weight:900;color:#fff;letter-spacing:.5px;white-space:nowrap;}
+.btn-del-dia{flex:0 0 auto;height:30px;font-size:11px;letter-spacing:1px;color:var(--red) !important;background:transparent;border:1px solid var(--red) !important;padding:5px 10px;border-radius:6px;cursor:pointer;font-family:var(--mono);white-space:nowrap;}
+.btn-del-dia:hover,.btn-del-dia:active{color:var(--red) !important;border-color:var(--red) !important;}
 
 .donuts{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:space-between;row-gap:4px;margin-bottom:4px;}
 .donut-box{text-align:center;flex:1 1 18%;min-width:58px;}
@@ -68,10 +66,11 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 .chart-scroll:active{cursor:grabbing;}
 .chart-scroll canvas{display:block;}
 
-.week-strip{flex:0 0 auto;display:flex;gap:4px;margin-top:4px;}
-.week-cell{flex:1;height:32px;border-radius:6px;background:#0d1512;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);font-weight:800;cursor:pointer;}
+.week-strip{flex:1 1 0;min-width:0;display:flex;gap:3px;}
+.week-cell{flex:1 1 0;min-width:0;height:30px;border-radius:6px;background:#0d1512;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--dim);font-weight:800;cursor:pointer;padding:0;overflow:hidden;}
 .week-cell.today{border-color:var(--amber);color:var(--amber);}
-.week-cell.sel{background:var(--amber);color:#0b1210;border-color:var(--amber);}
+@keyframes blinkDay{0%,100%{background:var(--amber);color:#0b1210;}50%{background:#0d1512;color:var(--amber);}}
+.week-cell.sel{background:var(--amber);color:#0b1210;border-color:var(--amber);animation:blinkDay 1.2s ease-in-out infinite;}
 
 /* Siempre UNA sola fila: nowrap + tamaño que se adapta al ancho (10-12 px). */
 .legend{display:flex;gap:0 6px;font-size:clamp(10px,3.3vw,12px);color:var(--dim);margin-top:4px;width:100%;justify-content:space-between;flex:0 0 auto;flex-wrap:nowrap;white-space:nowrap;}
@@ -101,12 +100,16 @@ a.back:hover{color:var(--amber);border-color:var(--amber);}
 </head>
 <body>
 <div class="wrap">
-  <h1>HISTORICO <span style="display:flex;gap:6px;"><a class="back" id="btnFormatear" href="#" style="color:var(--red);border-color:var(--red);">FORMATEAR DATOS</a><a class="back" href="/">&larr; VOLVER</a></span></h1>
+  <h1>HISTORICO <a class="back" href="/">&larr; VOLVER</a></h1>
 
   <div class="panel">
+    <div class="day-row">
+      <span class="name" id="dayName"></span>
+      <div class="week-strip" id="weekStrip"></div>
+      <button class="btn-del-dia" id="btnDelDia">BORRAR DIA</button>
+    </div>
     <div class="day-pager" id="pager"></div>
     <div id="emptyMsg" style="display:none;">Aun no hay muestras registradas.</div>
-    <div class="week-strip" id="weekStrip"></div>
     <div class="legend">
       <span><i class="dot" style="background:var(--water)"></i>T1 Jacuzzi</span>
       <span><i class="dot" style="background:var(--water-hot)"></i>T2 Solar</span>
@@ -558,8 +561,6 @@ function buildUI(viewByKey, visibleDayKey){
     const page = document.createElement('div');
     page.className = 'day-page';
     page.innerHTML =
-      '<div class="day-hdr"><span class="name">'+DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1)+'</span>'+
-      '<span class="right">'+(isToday?'<span class="today-badge">HOY</span>':'')+'<button class="btn-del-dia" data-daykey="'+day.key+'">BORRAR DIA</button></span></div>'+
       '<div class="donuts">'+
         '<div class="donut-box">'+donutSVG(t[2]/totalDay,'#e0672e',44)+'<div class="val">SOLAR<br><b>'+fmtDur(t[2])+'</b></div></div>'+
         '<div class="donut-box">'+donutSVG(t[1]/totalDay,'#00c8f0',44)+'<div class="val">FILTRO<br><b>'+fmtDur(t[1])+'</b></div></div>'+
@@ -581,26 +582,6 @@ function buildUI(viewByKey, visibleDayKey){
       const idx = pageStates.length-1;
       new ResizeObserver(()=>redrawPage(idx)).observe(page.querySelector('.chart-scroll'));
     }
-
-    // Borrado de este dia concreto: pide confirmacion (no se puede
-    // deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
-    page.querySelector('.btn-del-dia').addEventListener('click', async () => {
-      const label = DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1);
-      if (!confirm('¿Borrar todo el registro del '+label+'? Esta accion no se puede deshacer.')) return;
-      const fromTs = Math.floor(day.date.getTime()/1000);
-      // No sumar 86400 fijo: en el dia de cambio de hora de otono el
-      // dia local dura 25h y ese calculo dejaba la ultima hora sin
-      // borrar. Se calcula la medianoche local del dia siguiente.
-      const nextMidnight = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate()+1);
-      const toTs = Math.floor(nextMidnight.getTime()/1000);
-      try {
-        await fetch('/api/history/deleteday?from='+fromTs+'&to='+toTs, { method: 'POST' });
-      } catch (e) {
-        alert('Error al borrar el dia.');
-        return;
-      }
-      loadData();
-    });
 
     const cell = document.createElement('div');
     cell.className = 'week-cell'+(isToday?' today sel':'');
@@ -626,10 +607,15 @@ function buildUI(viewByKey, visibleDayKey){
   });
 }
 
+let curDayIdx = 0; // indice del dia mostrado (lo usa el boton BORRAR DIA)
 function updateWeekSel(idx){
+  curDayIdx = idx;
   document.querySelectorAll('.week-cell').forEach((c,i)=>c.classList.toggle('sel', i===idx));
+  const d = DAYS[idx];
+  document.getElementById('dayName').textContent = d ? DIAS[d.date.getDay()]+' '+d.date.getDate()+'/'+(d.date.getMonth()+1) : '';
 }
 function goToDay(idx){
+  updateWeekSel(idx);
   const pager = document.getElementById('pager');
   if(pager.children[idx]) pager.scrollTo({left: pager.children[idx].offsetLeft, behavior:'smooth'});
 }
@@ -643,12 +629,10 @@ function goToDay(idx){
 // libramos de esa dependencia por completo.
 function computeChartHeight(page, scrollEl){
   const pager = document.getElementById('pager');
-  const hdr = page.querySelector('.day-hdr');
   const donuts = page.querySelector('.donuts');
-  const hdrStyle = getComputedStyle(hdr), donutsStyle = getComputedStyle(donuts);
-  const hdrH = hdr.offsetHeight + parseFloat(hdrStyle.marginBottom||0);
+  const donutsStyle = getComputedStyle(donuts);
   const donutsH = donuts.offsetHeight + parseFloat(donutsStyle.marginBottom||0);
-  return Math.max(120, pager.clientHeight - hdrH - donutsH);
+  return Math.max(120, pager.clientHeight - donutsH);
 }
 function redrawPage(i){
   const st = pageStates[i];
@@ -882,17 +866,22 @@ document.getElementById('evtNext').addEventListener('click', ()=> navEvt(1));
   });
 })();
 
-// Ultimo recurso si algun dia concreto no se deja borrar (datos
-// corruptos): borra TODO el historico. Doble confirmacion porque no
-// se puede deshacer.
-document.getElementById('btnFormatear').addEventListener('click', async (ev) => {
-  ev.preventDefault();
-  if (!confirm('¿Formatear TODOS los datos del historico? Esta accion no se puede deshacer.')) return;
-  if (!confirm('Ultima confirmacion: se borraran TODOS los dias, no solo el problematico. ¿Continuar?')) return;
+// Borrado del dia que se esta mostrando: pide confirmacion (no se puede
+// deshacer) y llama al endpoint con el rango [00:00, 24:00) del dia.
+document.getElementById('btnDelDia').addEventListener('click', async () => {
+  const day = DAYS[curDayIdx];
+  if(!day) return;
+  const label = DIAS[day.date.getDay()]+' '+day.date.getDate()+'/'+(day.date.getMonth()+1);
+  if (!confirm('¿Borrar todo el registro del '+label+'? Esta accion no se puede deshacer.')) return;
+  const fromTs = Math.floor(day.date.getTime()/1000);
+  // No sumar 86400 fijo: en el dia de cambio de hora de otono el dia local
+  // dura 25h. Se calcula la medianoche local del dia siguiente.
+  const nextMidnight = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate()+1);
+  const toTs = Math.floor(nextMidnight.getTime()/1000);
   try {
-    await fetch('/api/history/format', { method: 'POST' });
+    await fetch('/api/history/deleteday?from='+fromTs+'&to='+toTs, { method: 'POST' });
   } catch (e) {
-    alert('Error al formatear el historico.');
+    alert('Error al borrar el dia.');
     return;
   }
   loadData();

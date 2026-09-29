@@ -106,8 +106,8 @@ time_t scheduleNextStart() {
 }
 
 // Logica de descarga del serpentin solar: mientras T1 no alcance la
-// temperatura objetivo, se fuerza solar en ventanas de 5 min cada vez que
-// T2 supera el umbral de descarga. Pasados los 5 min se da por descargado
+// temperatura objetivo, se fuerza solar en ventanas de N min (ajustable, por
+// defecto 5) cada vez que T2 supera el umbral de descarga. Pasado ese tiempo se da por descargado
 // el serpentin y se vuelve a filtro, reevaluando T2 en el siguiente ciclo.
 static void autoHeatingLogic() {
   if (g_state.valvesLocked) return;
@@ -120,10 +120,10 @@ static void autoHeatingLogic() {
   }
 
   if (g_state.dischargeActive) {
-    // Descarga en curso: se mantiene hasta cumplir los 5 min.
+    // Descarga en curso: se mantiene hasta cumplir el tiempo configurado.
     if (millis() >= g_state.dischargeUntil) {
       g_state.dischargeActive = false;
-      Serial.println("[SCHED] Descarga de serpentin completada (5 min)");
+      Serial.printf("[SCHED] Descarga de serpentin completada (%u min)\n", g_state.dischargeMinutes);
       setValves(false);
     }
     // Si aun no ha pasado el tiempo, se deja tal cual (valvulas ya abiertas).
@@ -133,8 +133,8 @@ static void autoHeatingLogic() {
   // No hay descarga en curso: se inicia solo si T2 supera el umbral.
   if (g_state.tSolar > g_state.solarDischargeTemp) {
     g_state.dischargeActive  = true;
-    g_state.dischargeUntil   = millis() + DISCHARGE_DURATION_MS;
-    Serial.println("[SCHED] Iniciando descarga de serpentin (5 min)");
+    g_state.dischargeUntil   = millis() + (unsigned long)g_state.dischargeMinutes * 60000UL;
+    Serial.printf("[SCHED] Iniciando descarga de serpentin (%u min)\n", g_state.dischargeMinutes);
     setValves(true);
   } else {
     setValves(false);

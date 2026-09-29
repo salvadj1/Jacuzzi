@@ -63,8 +63,34 @@ svg{width:100%;height:auto;display:block;}
 .vlbl{font-size:18px;font-weight:900;letter-spacing:.4px;color:#7fe8ff;}
 .seg{display:flex;background:#0d1512;border:1px solid var(--line);border-radius:22px;overflow:hidden;}
 .seg .opt{padding:6px 14px;font-size:12px;font-weight:700;color:var(--dim);white-space:nowrap;}
-#segV1 .opt.active{background:var(--green);color:#04342c;}
-#segV2 .opt.active{background:var(--red);color:#fff;}
+/* ---- Tarjeta viva: bomba + FILTRANDO/CALENTANDO + descarga + maniobra de valvulas ---- */
+.lv-line{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;padding:4px 0;}
+.lv-pump{display:flex;align-items:center;gap:6px;flex:0 0 auto;font-weight:900;font-size:18px;letter-spacing:.4px;color:#fff;}
+.lv-eq{display:flex;gap:3px;align-items:center;height:30px;flex:0 0 auto;}
+.lv-eq i{width:6px;height:6px;background:var(--green);border-radius:3px;animation:lvEq .9s ease-in-out infinite;animation-play-state:paused;}
+.lv-eq i:nth-child(2){animation-delay:.2s;}
+.lv-eq i:nth-child(3){animation-delay:.4s;}
+@keyframes lvEq{0%,100%{height:6px;}50%{height:28px;}}
+.lv-pump.on .lv-eq i{animation-play-state:running;}
+.lv-pump.off span{color:var(--red);}
+.lv-pump.off .lv-eq i{background:var(--red);}
+.lv-opt{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:6px;height:44px;padding:0 6px;border-radius:8px;border:1px solid var(--line);background:#0d1512;opacity:.35;transition:opacity .3s,border-color .3s;font-size:18px;font-weight:900;letter-spacing:.4px;color:#fff;white-space:nowrap;}
+.lv-opt.c .lv-eq i{background:#00c8f0;}
+.lv-opt.o .lv-eq i{background:#e0672e;}
+.lv-opt.c{color:#4fd6ff;}
+.lv-opt.o{color:#ff6b5e;}
+.lv-opt.act{opacity:1;}
+.lv-opt.c.act{border-color:#00c8f0;}
+.lv-opt.o.act{border-color:#e0672e;}
+.lv-opt.act .lv-eq i{animation-play-state:running;}
+.lv-opt.tgt{opacity:1;border-color:var(--amber);animation:lvPl .8s infinite;}
+@keyframes lvPl{50%{opacity:.35;}}
+.lv-row{display:none;position:relative;margin-top:8px;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--amber);background:#2a1f08;}
+.lv-row.on{display:block;}
+.lv-mv{background:#1a1408;}
+.lv-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#8a5f0f;transition:width 1s linear;}
+.lv-tx{position:absolute;left:0;right:0;top:0;bottom:0;padding:0 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#fff;white-space:nowrap;}
+.lv-tx b{font-weight:900;}
 .clockprogrow{display:flex;gap:12px;}
 .clockbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;text-align:center;}
 .progbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;}
@@ -74,9 +100,10 @@ svg{width:100%;height:auto;display:block;}
 .cb-date{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:var(--dim);}
 .cb-prog{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:#8fffb0;margin:4px 0;}
 .cb-days{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:var(--dim);margin-top:3px;}
-.nextbanner{display:flex;justify-content:space-between;align-items:center;background:#1a1408;border:1px solid var(--amber);border-radius:8px;padding:9px 12px;margin-top:10px;}
-.nb-lbl{font-size:15px;color:var(--amber);letter-spacing:.5px;font-weight:900;}
-.nb-val{font-size:17px;color:var(--amber);font-weight:900;}
+.nextbanner{display:flex;justify-content:center;align-items:center;gap:10px;background:#1a1408;border:1px solid var(--amber);border-radius:8px;padding:9px 12px;margin-top:10px;white-space:nowrap;}
+.nb-lbl{font-size:12px;color:var(--amber);letter-spacing:.5px;font-weight:900;}
+.nb-cd{font-size:14px;color:#ffffff;font-weight:900;}
+.nb-day{font-size:12px;color:var(--dim);font-weight:900;}
 .gear-icon{width:16px;height:16px;}
 .minibox .row2:last-child{border-bottom:none;}
 .minibox .row2 .cell{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;}
@@ -115,6 +142,12 @@ svg{width:100%;height:auto;display:block;}
 .offset-ctrl.open{display:flex;}
 .offset-ctrl button{padding:6px 16px;font-size:16px;line-height:1;}
 .offset-ctrl b{color:var(--text);}
+#tempDisCtrl{flex-wrap:wrap;row-gap:10px;}
+.dur-ctrl{flex:0 0 100%;width:100%;text-align:center;border-top:1px solid var(--line);padding-top:10px;}
+.dur-ctrl .dur-lbl{font-size:10px;letter-spacing:1px;color:var(--dim);}
+.dur-ctrl .dur-val{display:block;font-size:14px;color:var(--amber);margin-top:4px;}
+.dur-ctrl input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--amber);background:transparent;}
+.dur-ctrl .dur-mm{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);}
 .progedit{display:none;flex-direction:column;gap:8px;background:#0a100e;border:1px solid var(--line);border-radius:5px;padding:10px;margin:4px 0 2px 0;font-size:12px;}
 .progedit.open{display:flex;}
 .progedit .fila{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -157,10 +190,13 @@ svg{width:100%;height:auto;display:block;}
   .cb-date{font-size:12px;}
   .cb-prog{font-size:12px;}
   .cb-days{font-size:12px;}
-  .nb-lbl{font-size:12px;}
-  .nb-val{font-size:13px;}
+  .nb-lbl{font-size:11px;}
+  .nb-cd{font-size:13px;}
+  .nb-day{font-size:11px;}
   .vlbl{font-size:14px;}
   .pill{font-size:11px;padding:5px 10px;}
+  .lv-pump,.lv-opt{font-size:12px;}
+  .lv-eq{height:22px;}
 }
 .statusbar .item b{color:var(--text);}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
@@ -214,9 +250,6 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 <div class="panel panel-main">
     <div class="minibox">
 
-      <div class="discharge-bar" id="dischargeBar">
-        <b>DESCARGA SOLAR EN CURSO · <span id="dischargeTime">—</span></b>
-      </div>
 
       <div class="cards">
         <div class="tcard clickable" id="rowT1">
@@ -248,26 +281,25 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
           <b class="tcard-val" id="solarDisVal">—</b>
           <div class="offset-ctrl" id="tempDisCtrl">
             <button id="solarDisDown">−</button><button id="solarDisUp">+</button>
+            <div class="dur-ctrl">
+              <div class="dur-lbl">DURACION DE DESCARGA</div>
+              <b class="dur-val" id="durVal">—</b>
+              <input type="range" id="durSlider" min="1" max="15" step="1" value="5">
+              <div class="dur-mm"><span>1</span><span>15 min</span></div>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
     <div class="minibox">
-      <div class="pillrow">
-        <span class="pill" id="pillBomba"><span class="pilllbl">BOMBA</span><b id="statPump">—</b></span>
-        <span class="pill" id="pillModo"><span class="pilllbl">MODO</span><b id="modeText">—</b></span>
+      <div class="lv-line">
+        <div class="lv-pump" id="lvPump"><div class="lv-eq"><i></i><i></i><i></i></div><span>BOMBA</span></div>
+        <div class="lv-opt c" id="lvFilt"><div class="lv-eq"><i></i><i></i><i></i></div><span>FILTRANDO</span></div>
+        <div class="lv-opt o" id="lvCal"><div class="lv-eq"><i></i><i></i><i></i></div><span>CALENTANDO</span></div>
       </div>
-      <div class="valverow">
-        <div class="valveitem">
-          <span class="vlbl">V1 (RUTA AGUA)</span>
-          <span class="seg" id="segV1"><span class="opt" data-v="filtro">FILTRO</span><span class="opt" data-v="serpentin">SERPENTÍN</span></span>
-        </div>
-        <div class="valveitem">
-          <span class="vlbl">V2 (RETORNO)</span>
-          <span class="seg" id="segV2"><span class="opt" data-v="cerrada">CERRADA</span><span class="opt" data-v="abierta">ABIERTA</span></span>
-        </div>
-      </div>
+      <div class="lv-row" id="lvCd"><i class="lv-fill" id="lvCdFill"></i><div class="lv-tx"><b>DESCARGA · <span id="lvCdTime">—</span></b><span>termina <span id="lvCdEnd">—</span></span></div></div>
+      <div class="lv-row lv-mv" id="lvMv"><i class="lv-fill" id="lvMvFill"></i><div class="lv-tx"><b id="lvMvLbl">MOVIENDO VÁLVULAS</b><b id="lvMvSec">—</b></div></div>
     </div>
 
     <div class="minibox">
@@ -288,8 +320,9 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
         </div>
       </div>
       <div class="nextbanner" id="nextBanner">
-        <span class="nb-lbl">SIGUIENTE PROGRAMA</span>
-        <b class="nb-val" id="nextProgText">—</b>
+        <span class="nb-lbl">INICIA EN</span>
+        <b class="nb-cd" id="nextProgCd">—</b>
+        <span class="nb-day" id="nextProgDay"></span>
       </div>
       <div class="progedit" id="clockEdit">
         <div class="fila">
@@ -434,6 +467,7 @@ function blinkReject(buttonId){
   }, 150);
 }
 const DIAS_LBL = ['D','L','M','X','J','V','S'];
+const DIAS_ORDEN = [1,2,3,4,5,6,0]; // orden visual L M X J V S D (los datos del ESP32 siguen 0 = domingo)
 
 // ---- Conexion WebSocket con el ESP32 ----
 function connectWs(){
@@ -562,13 +596,6 @@ function render(){
   el('statT2').textContent = state.tSolar.toFixed(1)+' °C';
   el('offT1Val').textContent = (state.offsetT1>=0?'+':'')+state.offsetT1.toFixed(1)+' °C';
   el('offT2Val').textContent = (state.offsetT2>=0?'+':'')+state.offsetT2.toFixed(1)+' °C';
-  el('statPump').textContent = state.pumpOn ? 'ON' : 'OFF';
-  el('pillBomba').classList.toggle('bad', !state.pumpOn);
-
-  el('segV1').querySelector('[data-v="filtro"]').classList.toggle('active', !state.valvulasActivas);
-  el('segV1').querySelector('[data-v="serpentin"]').classList.toggle('active', state.valvulasActivas);
-  el('segV2').querySelector('[data-v="cerrada"]').classList.toggle('active', !state.valvulasActivas);
-  el('segV2').querySelector('[data-v="abierta"]').classList.toggle('active', state.valvulasActivas);
 
   applyValve('valve1', !state.valvulasActivas);
   applyValve('valve2', state.valvulasActivas);
@@ -593,21 +620,38 @@ function render(){
   else if(solarActive){ sand.setAttribute('fill', '#6f7a76'); sand.setAttribute('opacity', '0.7'); }
   else { sand.setAttribute('fill', '#7a5a34'); sand.setAttribute('opacity', '0.55'); }
 
-  let modeLabel = 'PARADO';
-  if(state.pumpOn){
-    modeLabel = solarActive ? 'CALENTANDO (SOLAR)' : 'FILTRANDO (NORMAL)';
-  }
-  if(state.dischargeActive) modeLabel = 'DESCARGA SOLAR';
-  el('modeText').textContent = modeLabel;
-  el('pillModo').classList.toggle('bad', !state.pumpOn && !state.dischargeActive);
+  // ---- Tarjeta viva: bomba, modo activo, cuenta atras de descarga y maniobra de valvulas ----
+  {
+    const pumpOn = !!state.pumpOn, locked = !!state.valvesLocked, sol = !!state.valvulasActivas;
+    el('lvPump').classList.toggle('on', pumpOn);
+    el('lvPump').classList.toggle('off', !pumpOn);
+    // El modo solo se enciende con la bomba en marcha y las valvulas quietas;
+    // durante la maniobra parpadea el modo de destino.
+    el('lvFilt').classList.toggle('act', pumpOn && !sol && !locked);
+    el('lvCal').classList.toggle('act',  pumpOn &&  sol && !locked);
+    el('lvFilt').classList.toggle('tgt', locked && !sol);
+    el('lvCal').classList.toggle('tgt',  locked &&  sol);
 
-  // Cuenta atras de la descarga forzada del serpentin solar (ventana de 5 min)
-  el('dischargeBar').classList.toggle('on', !!state.dischargeActive);
-  if(state.dischargeActive){
-    const s = Math.max(0, state.dischargeRemainSec|0);
-    const mm = String(Math.floor(s/60)).padStart(2,'0');
-    const ss = String(s%60).padStart(2,'0');
-    el('dischargeTime').textContent = mm+':'+ss;
+    // Fila de maniobra de valvulas (solo mientras giran)
+    el('lvMv').classList.toggle('on', locked);
+    if(locked){
+      const mvTotal = state.valveMoveSec || 10;
+      const rem = Math.max(0, state.valveRemainSec|0);
+      el('lvMvLbl').textContent = sol ? 'MOVIENDO A SERPENTÍN' : 'MOVIENDO A FILTRO';
+      el('lvMvSec').textContent = rem+' s';
+      el('lvMvFill').style.width = Math.min(100, Math.max(0, (1 - rem/mvTotal)*100))+'%';
+    }
+
+    // Fila de descarga solar: cuenta atras, hora de fin y relleno de progreso
+    el('lvCd').classList.toggle('on', !!state.dischargeActive);
+    if(state.dischargeActive){
+      const s = Math.max(0, state.dischargeRemainSec|0);
+      const total = (state.dischargeMinutes || 5) * 60;
+      const end = new Date(estimatedNow().getTime() + s*1000);
+      el('lvCdTime').textContent = pad2(Math.floor(s/60))+':'+pad2(s%60);
+      el('lvCdEnd').textContent = pad2(end.getHours())+':'+pad2(end.getMinutes());
+      el('lvCdFill').style.width = Math.min(100, Math.max(0, (1 - s/total)*100))+'%';
+    }
   }
 
   // btnAuto y btnPump son interruptores independientes (ON/OFF propio).
@@ -638,23 +682,30 @@ function renderSchedule(){
     el('statClock').textContent = now.toLocaleTimeString('es-ES');
     el('statClockDate').textContent = now.toLocaleDateString('es-ES');
   }
-  const diasTxt = s.days.map((on,i)=> on ? DIAS_LBL[i] : null).filter(Boolean).join(' ');
+  const diasTxt = DIAS_ORDEN.filter(i=> s.days[i]).map(i=> DIAS_LBL[i]).join(' ');
   el('progText').textContent = `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)}`;
   el('progDaysTxt').textContent = diasTxt;
 
   if(state.nextStart > 0){
     const next = new Date(state.nextStart*1000);
-    const dia = next.toLocaleDateString('es-ES',{weekday:'short'});
+    const diaRaw = next.toLocaleDateString('es-ES',{weekday:'short'});
+    const dia = diaRaw.charAt(0).toUpperCase() + diaRaw.slice(1);
     const diffMin = Math.max(0, Math.round((next-estimatedNow())/60000));
     const h = Math.floor(diffMin/60), m = diffMin%60;
-    const countdown = h>0 ? `${h}h ${m}min` : `${m}min`;
-    el('nextProgText').textContent = `${dia} ${pad2(next.getHours())}:${pad2(next.getMinutes())} · en ${countdown}`;
+    el('nextProgCd').textContent = h>0 ? `${h}h ${m}m` : `${m}m`;
+    el('nextProgDay').textContent = `· ${dia} ${pad2(next.getHours())}:${pad2(next.getMinutes())}`;
   } else {
-    el('nextProgText').textContent = 'Sin programas configurados';
+    el('nextProgCd').textContent = 'Sin programas';
+    el('nextProgDay').textContent = '';
   }
 
   el('tempSetVal').textContent = state.targetTemp.toFixed(1)+' °C';
   el('solarDisVal').textContent = state.solarDischargeTemp.toFixed(1)+' °C';
+  // Slider de duracion de descarga: no se toca mientras el usuario lo arrastra
+  if(!durDragging && state.dischargeMinutes !== undefined){
+    el('durSlider').value = state.dischargeMinutes;
+    el('durVal').textContent = state.dischargeMinutes+' min';
+  }
 }
 
 // ---- Panel de edicion del programa de filtracion ----
@@ -662,10 +713,10 @@ let editDays = [];
 function buildDiasPicker(){
   const cont = el('progDias');
   cont.innerHTML = '';
-  DIAS_LBL.forEach((lbl, idx)=>{
+  DIAS_ORDEN.forEach(idx=>{
     const d = document.createElement('div');
     d.className = 'dia'+(editDays[idx] ? ' on' : '');
-    d.textContent = lbl;
+    d.textContent = DIAS_LBL[idx];
     d.onclick = ()=>{ editDays[idx] = !editDays[idx]; d.classList.toggle('on'); };
     cont.appendChild(d);
   });
@@ -731,6 +782,19 @@ el('solarDisDown').onclick = ()=>{
   if(!state) return;
   sendCmd({ cmd:'setSolarDischargeTemp', value: +(state.solarDischargeTemp-0.5).toFixed(1) });
 };
+
+// ---- Duracion de la descarga solar (slider 1-15 min). Mientras se arrastra
+// solo se actualiza el numero; el valor se envia (y se guarda en el ESP32)
+// al soltar, para no escribir en la flash a cada paso. ----
+let durDragging = false;
+el('durSlider').addEventListener('input', ()=>{
+  durDragging = true;
+  el('durVal').textContent = el('durSlider').value+' min';
+});
+el('durSlider').addEventListener('change', ()=>{
+  sendCmd({ cmd:'setDischargeMinutes', value: parseInt(el('durSlider').value, 10) });
+  durDragging = false;
+});
 
 // ---- Offset de calibracion de T1/T2, resolucion 0.5°C. Cada fila de
 // temperatura del listado despliega su propio panel de ajuste al tocarla,

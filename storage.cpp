@@ -5,6 +5,7 @@
  * -----------------------------------------------------------------------
  */
 #include "storage.h"
+#include "config.h"
 #include <Preferences.h>
 
 // Espacios de nombres (namespaces) separados dentro de la NVS para no
@@ -203,5 +204,22 @@ void storageLoadSolarDischargeTemp() {
 void storageSaveSolarDischargeTemp() {
   prefsTemp.begin("temp", false);
   prefsTemp.putFloat("solarDis", g_state.solarDischargeTemp);
+  prefsTemp.end();
+}
+
+// Carga la duracion de descarga (minutos) desde NVS; si el valor guardado
+// esta fuera de rango se usa el de por defecto.
+void storageLoadDischargeMinutes() {
+  prefsTemp.begin("temp", true);
+  uint8_t m = prefsTemp.getUChar("disMin", DISCHARGE_MIN_DEFAULT);
+  prefsTemp.end();
+  if (m < DISCHARGE_MIN_MIN || m > DISCHARGE_MIN_MAX) m = DISCHARGE_MIN_DEFAULT;
+  g_state.dischargeMinutes = m;
+}
+
+// Guarda la duracion de descarga (minutos) en NVS.
+void storageSaveDischargeMinutes() {
+  prefsTemp.begin("temp", false);
+  prefsTemp.putUChar("disMin", g_state.dischargeMinutes);
   prefsTemp.end();
 }

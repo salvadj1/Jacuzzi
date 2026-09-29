@@ -39,8 +39,15 @@ static String buildStateJson() {
   doc["forceSolar"]   = g_state.forceSolar;
   doc["valvulasActivas"] = g_state.valvulasActivas;
   doc["valvesLocked"] = g_state.valvesLocked;
+
+  // Maniobra de valvulas: segundos restantes y duracion total (para la barra de progreso)
+  long valveRemainMs = (long)(g_state.valveLockUntil - millis());
+  doc["valveRemainSec"] = g_state.valvesLocked && valveRemainMs > 0
+                             ? ((valveRemainMs + 999) / 1000) : 0;
+  doc["valveMoveSec"]   = VALVE_MOVE_MS / 1000;
   doc["targetTemp"]   = g_state.targetTemp;
   doc["solarDischargeTemp"] = g_state.solarDischargeTemp;
+  doc["dischargeMinutes"] = g_state.dischargeMinutes;
 
   // Descarga forzada del serpentin solar: activa + segundos restantes
   doc["dischargeActive"] = g_state.dischargeActive;
@@ -128,6 +135,13 @@ static void handleCommand(const String &jsonStr, AsyncWebSocketClient *client) {
     g_state.solarDischargeTemp = roundf(value / SOLAR_DISCHARGE_STEP) * SOLAR_DISCHARGE_STEP; // resolucion 0.5, solo informativo
     storageSaveSolarDischargeTemp();
     Serial.printf("[WEB] Limite descarga solar actualizado: %.1f C\n", g_state.solarDischargeTemp);
+
+  } else if (cmd == "setDischargeMinutes") {
+    int value = doc["value"] | (int)g_state.dischargeMinutes;
+    value = constrain(value, DISCHARGE_MIN_MIN, DISCHARGE_MIN_MAX); // limita al rango permitido
+    g_state.dischargeMinutes = (uint8_t)value;
+    storageSaveDischargeMinutes();
+    Serial.printf("[WEB] Duracion de descarga actualizada: %d min\n", value);
 
   } else if (cmd == "setSchedule") {
     g_state.schedule.startHour   = doc["startHour"]   | g_state.schedule.startHour;

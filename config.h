@@ -80,7 +80,11 @@
 
 // ---------------- Tiempos ----------------
 #define VALVE_MOVE_MS      10000   // Tiempo que tardan en girar las valvulas motorizadas
-#define DISCHARGE_DURATION_MS (5UL * 60UL * 1000UL) // Duracion de la descarga forzada del serpentin solar
+// Duracion de la descarga forzada del serpentin solar: ajustable desde la web
+// (slider), se guarda en NVS. Valores en minutos.
+#define DISCHARGE_MIN_DEFAULT 5    // Valor por defecto si no hay nada guardado
+#define DISCHARGE_MIN_MIN     1    // Minimo permitido por el slider
+#define DISCHARGE_MIN_MAX     15   // Maximo permitido por el slider
 #define SENSOR_READ_MS      2000   // Cada cuanto se leen los sensores de temperatura
 #define BROADCAST_MS         900   // Cada cuanto se envia el estado por WebSocket
 #define AP_CONFIG_WINDOW_MS (5UL * 60UL * 1000UL)  // AP de configuracion abierto 5 min en cada arranque

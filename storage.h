@@ -74,6 +74,13 @@ void storageLoadSolarDischargeTemp();
 // Guarda el limite actual de g_state.solarDischargeTemp
 void storageSaveSolarDischargeTemp();
 
+// ---------------- Duracion de la descarga solar ----------------
+// Carga la duracion (minutos) guardada en g_state.dischargeMinutes
+void storageLoadDischargeMinutes();
+
+// Guarda la duracion actual de g_state.dischargeMinutes
+void storageSaveDischargeMinutes();
+
 // ---------------- Offset de calibracion de sensores ----------------
 // Carga los offsets guardados en g_state.offsetT1 / g_state.offsetT2
 void storageLoadTempOffsets();
