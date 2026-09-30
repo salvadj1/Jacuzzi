@@ -31,7 +31,7 @@
 // ============================================================================
 // ---------------------------- Configuracion --------------------------------
 // ============================================================================
-#define LEDS_MAX_STRIPS        6     // Tiras maximas en el grupo
+#define LEDS_MAX_STRIPS        8     // Tiras maximas en el grupo
 #define LEDS_MAX_PROGRAMS      5     // Programas horarios maximos
 #define LEDS_SCAN_SECONDS      6     // Duracion de cada escaneo bajo demanda
 #define LEDS_RECONNECT_MIN_MS  4000  // Backoff de reconexion: minimo

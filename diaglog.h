@@ -118,10 +118,15 @@ void diaglogLoop(uint8_t wsClients, uint16_t wifiReconnects, uint16_t ntcErrors)
 // micros() al principio y al final de loop().
 void diaglogRecordLoopDuration(uint32_t micros_duration);
 
-// Construye el JSON de respuesta para el endpoint /api/diag con las
-// muestras disponibles. A partir de la migracion, se obtiene por HTTP
-// del servidor remoto (o del buffer local de emergencia si no responde).
-String diaglogToJson();
+// Devuelve el JSON de /api/diag SIN BLOQUEAR (seguro desde el callback web).
+// El historico se descarga del servidor remoto en una tarea aparte (o del
+// buffer local de emergencia si no responde) y se deja en cache.
+//   - Si hay una descarga lista: la devuelve y la consume.
+//   - Si no: lanza la descarga, devuelve {"intervalMs":N,"samples":[]} y pone
+//     *refreshing = true (el llamador debe avisar al cliente, p.ej. con la
+//     cabecera X-Refreshing, para que repita la peticion en unos segundos).
+// refreshing es opcional (puede ser nullptr).
+String diaglogToJson(bool *refreshing = nullptr);
 
 // Pide al servidor remoto borrar TODO el historico de diagnostico, y
 // limpia tambien el buffer local de emergencia.

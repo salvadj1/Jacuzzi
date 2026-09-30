@@ -58,7 +58,7 @@ td.toggle{cursor:pointer;color:var(--dim);width:18px;text-align:center;}
 th.tree-toggle{border-color:var(--dim);}
 th.tree-toggle:hover, .tree-toggle:hover{border-color:var(--amber);color:var(--amber);}
 tr.detalle{display:none;}
-tr.detalle td{background:#0d1512;color:var(--dim);font-size:10px;padding:8px 10px;}
+tr.detalle td{background:#0d1512;color:var(--dim);font-size:12px;padding:8px 10px;}
 tr.detalle .grid{display:flex;flex-wrap:wrap;gap:4px 16px;}
 .filtro-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);margin-bottom:8px;}
 .filtro-row input{accent-color:var(--amber);}
@@ -88,6 +88,7 @@ tr.detalle .grid{display:flex;flex-direction:column;gap:4px;}
   .tarjeta .val{font-size:27px;}
   .tarjeta .sub{font-size:16px;}
   table{font-size:20px;}
+  tr.detalle td{font-size:18px;}
   .tab-btn{font-size:16px;}
   .filtro-row{font-size:20px;}
   .slider-val{font-size:21px;}
@@ -233,8 +234,12 @@ function drawLineChart(canvas, values, timestamps, strokeColorVar, height, fmtFn
   // rango real de los datos (p.ej. heap actual muy por encima del minimo
   // recomendado).
   const allValues = recommendedValue !== undefined ? [...values, recommendedValue] : values;
-  const maxV = Math.max(...allValues) * 1.05;
-  const minV = Math.min(...allValues) * 0.95;
+  // Margen del 5% del modulo del valor, SUMADO hacia fuera del rango (con
+  // valores negativos, como el RSSI, multiplicar por 1.05/0.95 invertiria
+  // los limites y la curva se saldria del recuadro).
+  const hi = Math.max(...allValues), lo = Math.min(...allValues);
+  const maxV = hi + Math.abs(hi) * 0.05;
+  const minV = lo - Math.abs(lo) * 0.05;
   const range = Math.max(maxV - minV, 1);
   const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--dim');
   const strokeColor = getComputedStyle(document.documentElement).getPropertyValue(strokeColorVar);
@@ -344,10 +349,23 @@ async function loadData(){
   let data;
   try{
     const res = await fetch('/api/diag');
+    // El ESP32 esta descargando el historico del servidor: aun no hay datos
+    // validos. No se pinta nada (se conserva lo anterior) y se reintenta.
+    if(res.headers.get('X-Refreshing')){
+      setTimeout(loadData, 2500);
+      return;
+    }
     data = await res.json();
   }catch(e){
     data = { samples: [] };
   }
+  // El servidor remoto devuelve intervalMs=0 (es un ajuste local del ESP32):
+  // el valor real se pide aparte.
+  try{
+    const ri = await fetch('/api/diag/interval');
+    const ji = await ri.json();
+    if(ji.intervalMs) data.intervalMs = ji.intervalMs;
+  }catch(e){}
   const samples = data.samples || [];
   const tDiag = document.getElementById('tablaDiag');
   const empty = document.getElementById('emptyMsg');
@@ -375,9 +393,9 @@ async function loadData(){
   drawLineChart(document.getElementById('rssiChart'), samples.map(s=>s[IDX.rssi]), samples.map(s=>s[IDX.ts]), '--water', 150, v=>Math.round(v)+' dBm', -70);
   drawLineChart(document.getElementById('ntcChart'), samples.map(s=>s[IDX.ntcErrors]), samples.map(s=>s[IDX.ts]), '--red', 150, v=>Math.round(v));
 
-  // Resumen: ultima muestra + numero de arranques detectados en el historico
+  // Resumen: ultima muestra + numero de reinicios anomalos (panic/watchdog/brownout)
   const last = samples[samples.length-1];
-  const arranques = samples.filter(s => s[IDX.eventClass] > 0).length;
+  const anomalos = samples.filter(s => s[IDX.eventClass] === 3).length;
 
   const heapClass = last[IDX.freeHeap] < 20000 ? 'bad' : (last[IDX.freeHeap] < 40000 ? 'warn' : 'ok');
 
@@ -400,7 +418,7 @@ async function loadData(){
     '<div class="tarjeta"><div class="lbl">UPTIME ACTUAL</div><div class="val">'+fmtUptime(last[IDX.uptime])+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">RECONEXIONES WIFI</div><div class="val '+(last[IDX.wifiReconnects]>3?'warn':'ok')+'">'+last[IDX.wifiReconnects]+'</div></div>'+
     '<div class="tarjeta"><div class="lbl">ERRORES SENSOR NTC</div><div class="val '+(last[IDX.ntcErrors]>0?'warn':'ok')+'">'+last[IDX.ntcErrors]+'</div></div>'+
-    '<div class="tarjeta"><div class="lbl">REINICIOS NO NORMALES</div><div class="val '+(arranques>0?'warn':'ok')+'">'+arranques+'</div></div>';
+    '<div class="tarjeta"><div class="lbl">REINICIOS NO NORMALES</div><div class="val '+(anomalos>0?'warn':'ok')+'">'+anomalos+'</div></div>';
 
   const cDiag = tDiag.querySelector('tbody');
   cDiag.innerHTML = '';

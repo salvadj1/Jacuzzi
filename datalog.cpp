@@ -46,15 +46,31 @@ static QueueHandle_t g_sendQueue = nullptr;
 // la tarea remoteLogTask() (al fallar un envio) y datalogToJson() (al
 // servir /api/history si el servidor no responde en ese momento).
 static LogEntry      g_fallback[REMOTE_LOG_FALLBACK_CAPACITY];
-static uint16_t      g_fbHead  = 0;
-static uint16_t      g_fbCount = 0;
+static uint16_t      g_fbHead  = 0;   // donde se escribira la proxima muestra
+static uint16_t      g_fbTail  = 0;   // muestra mas antigua = la siguiente a reenviar
+static uint16_t      g_fbCount = 0;   // muestras almacenadas ahora mismo
 static SemaphoreHandle_t g_fbMutex = nullptr;
 
+// Anade una muestra al buffer circular. Si esta lleno, pisa la mas antigua
+// (y avanza g_fbTail para que siga apuntando a la mas antigua que queda).
 static void fallbackPush(const LogEntry &e) {
   xSemaphoreTake(g_fbMutex, portMAX_DELAY);
   g_fallback[g_fbHead] = e;
   g_fbHead = (g_fbHead + 1) % REMOTE_LOG_FALLBACK_CAPACITY;
   if (g_fbCount < REMOTE_LOG_FALLBACK_CAPACITY) g_fbCount++;
+  else g_fbTail = (g_fbTail + 1) % REMOTE_LOG_FALLBACK_CAPACITY;
+  xSemaphoreGive(g_fbMutex);
+}
+
+// Descarta la muestra mas antigua (ya reenviada con exito al servidor).
+// Avanza g_fbTail: sin esto, el siguiente reenvio repetiria siempre la
+// misma muestra y el resto del backlog quedaria atascado.
+static void fallbackPop() {
+  xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+  if (g_fbCount > 0) {
+    g_fbTail = (g_fbTail + 1) % REMOTE_LOG_FALLBACK_CAPACITY;
+    g_fbCount--;
+  }
   xSemaphoreGive(g_fbMutex);
 }
 
@@ -68,9 +84,7 @@ static String fallbackToJson() {
   out.reserve(n * 26 + 16);
   out += "{\"samples\":[";
   for (int i = 0; i < n; i++) {
-    int physical = (g_fbCount < REMOTE_LOG_FALLBACK_CAPACITY)
-                     ? i
-                     : (g_fbHead + i) % REMOTE_LOG_FALLBACK_CAPACITY;
+    int physical = (g_fbTail + i) % REMOTE_LOG_FALLBACK_CAPACITY;
     LogEntry e = g_fallback[physical];
     if (i > 0) out += ',';
     out += '[';
@@ -91,6 +105,7 @@ static String fallbackToJson() {
 static void fallbackClear() {
   xSemaphoreTake(g_fbMutex, portMAX_DELAY);
   g_fbHead = 0;
+  g_fbTail = 0;
   g_fbCount = 0;
   xSemaphoreGive(g_fbMutex);
 }
@@ -137,18 +152,13 @@ static void remoteLogTask(void *pv) {
 
     if (backlog > 0) {
       xSemaphoreTake(g_fbMutex, portMAX_DELAY);
-      int physical = (g_fbCount < REMOTE_LOG_FALLBACK_CAPACITY)
-                       ? 0
-                       : g_fbHead;
-      LogEntry oldest = g_fallback[physical];
+      LogEntry oldest = g_fallback[g_fbTail];
       xSemaphoreGive(g_fbMutex);
 
       if (sendSampleHttp(oldest)) {
         // Exito: la mas antigua del backlog ya se envio, se quita del
-        // buffer avanzando el indice de lectura.
-        xSemaphoreTake(g_fbMutex, portMAX_DELAY);
-        g_fbCount--;
-        xSemaphoreGive(g_fbMutex);
+        // buffer avanzando el indice de lectura (g_fbTail).
+        fallbackPop();
       } else {
         // El servidor sigue sin responder: la muestra actual tambien se
         // guarda en el backlog (en vez de intentar enviarla ya) para no

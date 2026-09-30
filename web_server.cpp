@@ -259,8 +259,20 @@ void webServerBegin() {
   });
 
   // API con las muestras de diagnostico, en JSON
+  // No bloquea: si el historico aun se esta descargando del servidor remoto,
+  // responde vacio con la cabecera X-Refreshing y la pagina reintenta sola.
   server.on("/api/diag", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "application/json", diaglogToJson());
+    bool refreshing = false;
+    String json = diaglogToJson(&refreshing);
+    AsyncWebServerResponse *resp = request->beginResponse(200, "application/json", json);
+    if (refreshing) resp->addHeader("X-Refreshing", "1");
+    request->send(resp);
+  });
+
+  // Intervalo de muestreo actual (el servidor remoto no lo conoce: es un
+  // ajuste local del ESP32). La pagina /diag lo usa para sincronizar el slider.
+  server.on("/api/diag/interval", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"intervalMs\":" + String(diaglogGetIntervalMs()) + "}");
   });
 
   // Borra el historico de diagnostico (boton "BORRAR REGISTROS" en /diag)

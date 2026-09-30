@@ -25,6 +25,7 @@
 #include <esp_system.h>
 #include <time.h>
 #include <string.h>
+#include <utility>   // std::move (cache de la descarga del historico remoto)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -56,24 +57,65 @@ static QueueHandle_t g_sendQueue = nullptr;
 // durante un corte puntual del servidor, protegido con mutex porque lo
 // tocan tanto la tarea de envio como diaglogToJson() (contexto web).
 static DiagEntry         g_fallback[DIAG_LOG_CAPACITY_ENTRIES];
-static uint16_t          g_fbHead  = 0;
-static uint16_t          g_fbCount = 0;
+static uint16_t          g_fbHead  = 0;   // donde se escribira la proxima muestra
+static uint16_t          g_fbTail  = 0;   // muestra mas antigua = la siguiente a reenviar
+static uint16_t          g_fbCount = 0;   // muestras almacenadas ahora mismo
 static SemaphoreHandle_t g_fbMutex = nullptr;
 
+// Anade una muestra al buffer circular. Si esta lleno, pisa la mas antigua
+// (y avanza g_fbTail para que siga apuntando a la mas antigua que queda).
 static void fallbackPush(const DiagEntry &e) {
   xSemaphoreTake(g_fbMutex, portMAX_DELAY);
   g_fallback[g_fbHead] = e;
   g_fbHead = (g_fbHead + 1) % DIAG_LOG_CAPACITY_ENTRIES;
   if (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) g_fbCount++;
+  else g_fbTail = (g_fbTail + 1) % DIAG_LOG_CAPACITY_ENTRIES;
+  xSemaphoreGive(g_fbMutex);
+}
+
+// Descarta la muestra mas antigua (ya reenviada con exito al servidor).
+// Avanza g_fbTail: sin esto, el siguiente reenvio repetiria siempre la
+// misma muestra y el resto del backlog quedaria atascado.
+static void fallbackPop() {
+  xSemaphoreTake(g_fbMutex, portMAX_DELAY);
+  if (g_fbCount > 0) {
+    g_fbTail = (g_fbTail + 1) % DIAG_LOG_CAPACITY_ENTRIES;
+    g_fbCount--;
+  }
   xSemaphoreGive(g_fbMutex);
 }
 
 static void fallbackClear() {
   xSemaphoreTake(g_fbMutex, portMAX_DELAY);
   g_fbHead = 0;
+  g_fbTail = 0;
   g_fbCount = 0;
   xSemaphoreGive(g_fbMutex);
 }
+
+// ---------------- Muestra de arranque pendiente de hora NTP ----------------
+// Si al arrancar aun no hay hora valida, la muestra de arranque (la mas
+// importante: lleva el motivo del reset y el breadcrumb) se RETIENE aqui en
+// vez de enviarse con timestamp 0, que el servidor no devolveria nunca al
+// pedir "las ultimas N horas". Se envia en diaglogLoop() en cuanto haya
+// hora, restando el tiempo transcurrido para dejarla en su instante real.
+#define DIAG_MIN_VALID_EPOCH 1600000000UL   // por debajo de esto la hora NO es valida
+static bool          g_bootPending       = false;
+static DiagEntry     g_bootEntry;
+static unsigned long g_bootCreatedMillis = 0;
+
+// ---------------- Descarga del historico remoto en segundo plano ----------------
+// El callback de /api/diag (tarea async_tcp) NO puede hacer un GET bloqueante:
+// una tarea dedicada descarga el JSON y lo deja en cache; el callback solo
+// recoge la cache ya lista (ver diaglogToJson).
+#define DIAG_CACHE_KEEP_MS 30000UL          // si nadie recoge la descarga, se libera
+static TaskHandle_t      g_fetchTask   = nullptr;
+static SemaphoreHandle_t g_cacheMutex  = nullptr;
+static String            g_cache;           // JSON descargado, pendiente de recoger
+static bool              g_cacheReady  = false;
+static unsigned long     g_cacheMillis = 0;
+static volatile bool     g_fetching    = false;
+static void diagFetchTask(void *pv);        // definida junto a diaglogToJson
 
 // ---------------- Textos / clasificacion (puramente locales, sin red) ----------------
 
@@ -167,7 +209,7 @@ static String fallbackToJson() {
   out += g_intervalMs;
   out += ",\"samples\":[";
   for (int i = 0; i < n; i++) {
-    int physical = (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) ? i : (g_fbHead + i) % DIAG_LOG_CAPACITY_ENTRIES;
+    int physical = (g_fbTail + i) % DIAG_LOG_CAPACITY_ENTRIES;
     if (i > 0) out += ',';
     appendEntryJson(out, g_fallback[physical]);
   }
@@ -230,14 +272,11 @@ static void remoteDiagTask(void *pv) {
 
     if (backlog > 0) {
       xSemaphoreTake(g_fbMutex, portMAX_DELAY);
-      int physical = (g_fbCount < DIAG_LOG_CAPACITY_ENTRIES) ? 0 : g_fbHead;
-      DiagEntry oldest = g_fallback[physical];
+      DiagEntry oldest = g_fallback[g_fbTail];
       xSemaphoreGive(g_fbMutex);
 
       if (sendDiagHttp(oldest)) {
-        xSemaphoreTake(g_fbMutex, portMAX_DELAY);
-        g_fbCount--;
-        xSemaphoreGive(g_fbMutex);
+        fallbackPop();
       } else {
         fallbackPush(e);
         continue;
@@ -252,8 +291,11 @@ static void remoteDiagTask(void *pv) {
 
 // ---------------- API publica ----------------
 
-static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
-                      uint16_t wifiReconnects, uint16_t ntcErrors) {
+// Construye una muestra con el estado actual del sistema y reinicia los
+// acumuladores del periodo (marca de tiempo de muestra y pico de loop).
+// NO la envia: de eso se encarga enqueueEntry().
+static DiagEntry buildEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
+                            uint16_t wifiReconnects, uint16_t ntcErrors) {
   DiagEntry e;
   e.timestamp       = (uint32_t)time(nullptr);
   e.freeHeap        = (uint32_t)ESP.getFreeHeap();
@@ -270,18 +312,34 @@ static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
   e.wifiReconnects  = wifiReconnects;
   e.ntcErrors       = ntcErrors;
 
+  g_lastSampleMillis = millis();
+  g_maxLoopMicros = 0; // arranca de cero para medir el siguiente periodo
+  return e;
+}
+
+// Encola una muestra para que la tarea HTTP la envie al servidor remoto.
+// No bloquea: si la cola esta llena, descarta la muestra y lo avisa.
+static void enqueueEntry(const DiagEntry &e) {
   if (xQueueSend(g_sendQueue, &e, 0) != pdTRUE) {
     Serial.println("[DIAG] Cola de envio llena, muestra descartada");
   }
+}
 
-  g_lastSampleMillis = millis();
-  g_maxLoopMicros = 0; // arranca de cero para medir el siguiente periodo
+// Construye y encola una muestra en un solo paso (muestras periodicas).
+static void addEntry(uint8_t wsClients, uint8_t resetReason, uint8_t breadcrumb,
+                     uint16_t wifiReconnects, uint16_t ntcErrors) {
+  DiagEntry e = buildEntry(wsClients, resetReason, breadcrumb, wifiReconnects, ntcErrors);
+  enqueueEntry(e);
 }
 
 void diaglogInit() {
   g_fbMutex = xSemaphoreCreateMutex();
   g_sendQueue = xQueueCreate(REMOTE_LOG_QUEUE_LEN, sizeof(DiagEntry));
   xTaskCreatePinnedToCore(remoteDiagTask, "remoteDiagTask", 4096, nullptr, 1, nullptr, 0);
+
+  // Tarea + mutex de la descarga en segundo plano del historico (ver diaglogToJson)
+  g_cacheMutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(diagFetchTask, "diagFetchTask", 5120, nullptr, 1, &g_fetchTask, 0);
 
   // El intervalo de muestreo es lo UNICO que se sigue guardando en NVS:
   // es un ajuste (4 bytes), no el historico completo.
@@ -313,10 +371,40 @@ void diaglogInit() {
   }
   g_rtcStage = DIAG_STAGE_BOOT;
 
-  addEntry(0, (uint8_t)reason, crumb, 0, 0);
+  // Muestra de arranque: si ya hay hora valida se envia ya; si no, se
+  // retiene hasta que NTP sincronice (ver g_bootPending / diaglogLoop).
+  DiagEntry boot = buildEntry(0, (uint8_t)reason, crumb, 0, 0);
+  if (boot.timestamp >= DIAG_MIN_VALID_EPOCH) {
+    enqueueEntry(boot);
+  } else {
+    g_bootEntry         = boot;
+    g_bootCreatedMillis = millis();
+    g_bootPending       = true;
+    Serial.println("[DIAG] Sin hora NTP: muestra de arranque retenida hasta sincronizar");
+  }
 }
 
 void diaglogLoop(uint8_t wsClients, uint16_t wifiReconnects, uint16_t ntcErrors) {
+  // Muestra de arranque retenida: en cuanto hay hora valida se le pone su
+  // timestamp real (hora actual menos el tiempo que lleva esperando) y se encola.
+  if (g_bootPending) {
+    time_t now = time(nullptr);
+    if ((unsigned long)now >= DIAG_MIN_VALID_EPOCH) {
+      g_bootEntry.timestamp = (uint32_t)now - (uint32_t)((millis() - g_bootCreatedMillis) / 1000UL);
+      enqueueEntry(g_bootEntry);
+      g_bootPending = false;
+    }
+  }
+
+  // Libera la descarga del historico si nadie la recogio (p.ej. se cerro la
+  // pestaña). try-lock (timeout 0): el loop() principal nunca se bloquea.
+  if (g_cacheReady && millis() - g_cacheMillis > DIAG_CACHE_KEEP_MS &&
+      xSemaphoreTake(g_cacheMutex, 0) == pdTRUE) {
+    g_cache = (const char*)nullptr;   // invalidate(): devuelve la memoria al heap
+    g_cacheReady = false;
+    xSemaphoreGive(g_cacheMutex);
+  }
+
   if (millis() - g_lastSampleMillis < g_intervalMs) return;
   addEntry(wsClients, 0, DIAG_STAGE_BOOT, wifiReconnects, ntcErrors);
 }
@@ -362,7 +450,10 @@ static String diagErrorJson(const char *msg) {
   return out;
 }
 
-String diaglogToJson() {
+// Descarga el historico del servidor remoto (GET bloqueante, hasta ~2 x
+// REMOTE_LOG_HTTP_TIMEOUT_MS). SOLO debe llamarse desde diagFetchTask, nunca
+// desde un callback web ni desde loop(). Si falla, devuelve el buffer local.
+static String fetchDiagFromServer() {
   if (WiFi.status() == WL_CONNECTED) {
     // Solo se piden las ultimas REMOTE_DIAG_FETCH_HOURS horas al servidor
     // (parametro "desde" de /api/diag). Sin hora NTP valida no se puede
@@ -405,6 +496,56 @@ String diaglogToJson() {
   }
   Serial.println("[DIAG] /api/diag remoto no disponible, sirviendo buffer local");
   return fallbackToJson();
+}
+
+// Tarea de segundo plano: espera un aviso (xTaskNotifyGive), descarga el
+// historico y lo deja en cache para que diaglogToJson() lo recoja.
+static void diagFetchTask(void *pv) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // duerme hasta que pidan una descarga
+    String body = fetchDiagFromServer();
+
+    xSemaphoreTake(g_cacheMutex, portMAX_DELAY);
+    g_cache       = std::move(body);
+    g_cacheReady  = true;
+    g_cacheMillis = millis();
+    xSemaphoreGive(g_cacheMutex);
+
+    g_fetching = false;
+  }
+}
+
+// Version NO bloqueante para el callback de /api/diag:
+//  - Si hay una descarga lista, la entrega (y la consume, sin copiarla).
+//  - Si no, pide la descarga a la tarea y responde AL MOMENTO una lista
+//    vacia, poniendo *refreshing = true para que el llamador lo indique
+//    (cabecera X-Refreshing) y el cliente vuelva a pedir en unos segundos.
+String diaglogToJson(bool *refreshing) {
+  if (refreshing) *refreshing = false;
+
+  String out;
+  bool listo = false;
+  xSemaphoreTake(g_cacheMutex, portMAX_DELAY);
+  if (g_cacheReady) {
+    out = std::move(g_cache);
+    g_cacheReady = false;
+    listo = true;
+  }
+  xSemaphoreGive(g_cacheMutex);
+  if (listo) return out;
+
+  if (!g_fetching && g_fetchTask) {
+    g_fetching = true;
+    xTaskNotifyGive(g_fetchTask);
+  }
+  if (refreshing) *refreshing = true;
+
+  String vacio;
+  vacio.reserve(48);
+  vacio += "{\"intervalMs\":";
+  vacio += g_intervalMs;
+  vacio += ",\"samples\":[]}";
+  return vacio;
 }
 
 void diaglogClear() {
