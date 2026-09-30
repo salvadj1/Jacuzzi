@@ -79,6 +79,16 @@ struct LedStrip {
   String   mac;                   // direccion MAC (identificador persistente)
   String   name;                  // nombre visible (del anuncio BLE, o la MAC si no hay)
   bool     connected = false;     // conectada ahora mismo
+  // --- Sincronizacion con el horario (ver ledsUpdateSyncFlags) ---
+  // stateSentGen: ultima "generacion" del horario cuyo estado COMPLETO (color/efecto + power) se
+  //               encolo a esta tira; solo lo marca ledsSendCurrentStateToStrip (unica fuente de verdad).
+  // syncedGen:    ultima generacion cuyo estado esta CONFIRMADO como entregado (cola vacia).
+  uint32_t stateSentGen = 0;
+  uint32_t syncedGen    = 0;
+  // txFailed: algun write BLE a esta tira ha fallado (ver ledsSendRaw). Impide darla
+  // por sincronizada y fuerza el reenvio del estado vigente (ver ledsUpdateSyncFlags).
+  bool     txFailed     = false;
+  uint8_t  resendCount  = 0;     // reenvios de estado hechos en la generacion actual (tope LEDS_SCHEDULE_MAX_RESENDS)
   unsigned long nextRetryMs = 0;  // millis() en el que se reintentara conectar
   unsigned long retryDelayMs = LEDS_RECONNECT_MIN_MS; // backoff actual
   NimBLEClient* client = nullptr;             // cliente NimBLE de esta tira
@@ -119,6 +129,7 @@ struct LedProgram {
 // ============================================================================
 static LedStrip    g_strips[LEDS_MAX_STRIPS];
 static LedProgram  g_programs[LEDS_MAX_PROGRAMS];
+static uint8_t     g_visiblePrograms = 1; // programas visibles en la web (1..LEDS_MAX_PROGRAMS), compartido entre dispositivos y guardado en NVS
 
 static uint8_t  g_colorR = 255, g_colorG = 120, g_colorB = 0; // color base actual
 static uint8_t  g_brightness = 100;   // 0-100 %
@@ -170,14 +181,20 @@ static SemaphoreHandle_t g_prefsMutex = nullptr;
 // nadie la esta viendo. La UNICA excepcion son los programas horarios
 // (encendido/apagado automatico), que deben funcionar siempre.
 static volatile unsigned long g_lastWebPresenceMs = 0;
-// Ventana de tiempo tras un cambio de programa horario durante la que SI
-// se permite conectar/enviar aunque no haya nadie en la pagina: el tiempo
-// justo para que la tarea de reconexion conecte las tiras pendientes y
-// les entregue el nuevo estado.
-static volatile unsigned long g_scheduleWantsConnectionUntilMs = 0;
+// Ventana BLE del horario: tras cada cambio de estado impuesto por un
+// programa (encender, apagar o cambiar su color/intensidad) se incrementa
+// g_scheduleGen y se abre una ventana en la que SI se permite conectar y
+// enviar aunque no haya nadie en la pagina. La ventana NO es de duracion
+// fija: se mantiene abierta mientras alguna tira del grupo no haya recibido
+// el ultimo estado (syncedGen != g_scheduleGen), y se cierra en cuanto todas
+// lo tienen, con un tope total de LEDS_SCHEDULE_SYNC_MAX_MS.
+static volatile uint32_t      g_scheduleGen          = 0;     // contador de cambios de estado del horario
+static volatile unsigned long g_scheduleSyncStartMs  = 0;     // instante del ultimo cambio (inicio del tope)
+static volatile bool          g_scheduleSyncActive   = false; // hay una ventana de sincronizacion en curso
 
 #define LEDS_PRESENCE_TIMEOUT_MS 3000            // ~2 ciclos del poll de la web (1200ms)
-#define LEDS_SCHEDULE_CONNECT_WINDOW_MS 60000UL  // margen para conectar todas las tiras tras un cambio de programa
+#define LEDS_SCHEDULE_SYNC_MAX_MS 300000UL       // tope total (5 min) de la ventana BLE abierta por el horario si alguna tira no llega a sincronizarse
+#define LEDS_SCHEDULE_MAX_RESENDS 3              // reenvios maximos del estado del horario a una misma tira por cambio (evita bucles si sus writes fallan siempre)
 
 // Marca que hay alguien viendo/usando la pagina "/leds" ahora mismo.
 // Llamar desde cualquier endpoint que solo tenga sentido con la pagina
@@ -192,11 +209,28 @@ static bool ledsUserPresent() {
   return (millis() - g_lastWebPresenceMs) < LEDS_PRESENCE_TIMEOUT_MS;
 }
 
+// true si alguna tira del grupo aun no tiene confirmado el ultimo estado
+// impuesto por el horario (su syncedGen va por detras de g_scheduleGen).
+static bool ledsScheduleSyncPending() {
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].syncedGen != g_scheduleGen) return true;
+  }
+  return false;
+}
+
+// true si la ventana BLE del horario esta abierta: hay una sincronizacion
+// en curso, no se ha superado el tope total y todavia falta alguna tira.
+static bool ledsScheduleSyncWindowOpen() {
+  if (!g_scheduleSyncActive) return false;
+  if ((millis() - g_scheduleSyncStartMs) >= LEDS_SCHEDULE_SYNC_MAX_MS) return false;
+  return ledsScheduleSyncPending();
+}
+
 // true si el modulo tiene permiso para usar el radio BLE ahora mismo:
 // o hay alguien en la pagina, o un programa horario acaba de cambiar de
 // estado y todavia esta dentro de su ventana para conectar y aplicarlo.
 static bool ledsBleAllowedNow() {
-  return ledsUserPresent() || (long)(g_scheduleWantsConnectionUntilMs - millis()) > 0;
+  return ledsUserPresent() || ledsScheduleSyncWindowOpen();
 }
 
 // Pequena ayuda RAII para no olvidar nunca soltar un mutex, incluso si hay
@@ -229,6 +263,11 @@ private:
 // --- Estado de aplicacion del programa horario (para no repetir logs/acciones) ---
 static bool g_scheduleForcedState = false; // ultimo estado ON/OFF calculado por el horario (para detectar cambios)
 static bool g_scheduleOwnsPower   = false; // true si el power actual (ON) lo puso el horario, no el usuario
+static volatile bool g_scheduleSlotActive = false; // hay una franja de programa vigente ahora mismo (con independencia del power manual)
+static volatile bool g_scheduleManualOff  = false; // el usuario apago a mano durante la franja vigente: el horario no reenciende hasta que termine
+static bool g_scheduleBootResolved = false; // ya se derivo el estado inicial tras arrancar (requiere reloj NTP valido)
+static int  g_scheduleActiveIdx    = -1;    // programa cuyo aspecto (color/intensidad) aplico el horario por ultima vez
+static uint8_t g_scheduleAppliedR = 0, g_scheduleAppliedG = 0, g_scheduleAppliedB = 0, g_scheduleAppliedInt = 0; // aspecto aplicado (para detectar ediciones en caliente)
 
 // Declaraciones adelantadas (funciones privadas de este archivo)
 static void ledsApplyColorToAllStrips(uint8_t r, uint8_t g, uint8_t b);
@@ -284,6 +323,7 @@ static void ledsSendRaw(LedStrip &s, const uint8_t *data, size_t len, const Stri
   // "true" = write sin respuesta (write-without-response): mas rapido y
   // es lo que esperan estas tiras; evita bloquear esperando ACK.
   bool ok = s.writeChar->writeValue((uint8_t*)data, len, false);
+  if (!ok) s.txFailed = true; // el horario lo usara para no darla por sincronizada y reenviar
   Serial.printf("[LEDS][BLE-TX] %s (%s): [ %s] -> %s [%s]\n",
                 s.name.c_str(), s.mac.c_str(), hex.c_str(),
                 ok ? "OK" : "FALLO", desc.c_str());
@@ -546,6 +586,28 @@ private:
   int idx;
 };
 
+// Encola el reenvio del estado VIGENTE del grupo (color/efecto/brillo y
+// on-off) a UNA tira, para que quede igual que el resto. Se usa al
+// reconectar y cuando el horario detecta que una tira conectada no recibio
+// su ultimo estado. Si hay que encender, el color/efecto va primero y el
+// opcode de "power ON" despues (orden invertido a proposito: en esta tira el
+// opcode de encendido solo no siempre reactiva la salida). Reutilizable con
+// cualquier tira de este mismo protocolo. El llamante debe tener g_bleMutex.
+static void ledsSendCurrentStateToStrip(LedStrip &s, const char *source) {
+  if (g_power) {
+    if (g_effect == 0) {
+      ledsSendColorToStrip(s, ledsScaleChannel(g_colorR, g_brightness),
+                              ledsScaleChannel(g_colorG, g_brightness),
+                              ledsScaleChannel(g_colorB, g_brightness));
+    } else {
+      ledsSendEffectToStrip(s, LEDS_HW_EFFECT_CODES[g_effect - 1]);
+      ledsSendEffectSpeedToStrip(s, g_speed);
+    }
+  }
+  ledsSendPowerToStrip(s, g_power, source);
+  s.stateSentGen = g_scheduleGen; // el estado vigente (incluido el del horario) queda encolado para esta tira
+}
+
 // Intenta conectar (de forma NO bloqueante para el resto del sistema:
 // NimBLE hace la conexion en su propia tarea interna, pero la llamada de
 // connect() en si tarda hasta unos segundos, por eso solo se invoca cada
@@ -645,17 +707,7 @@ static void ledsTryConnectStrip(LedStrip &s) {
   // proposito): en esta tira en concreto el opcode de encendido solo,
   // sin color, no siempre reactiva la salida; el comando de color/efecto
   // si la reactiva de forma fiable.
-  if (g_power) {
-    if (g_effect == 0) {
-      ledsSendColorToStrip(s, ledsScaleChannel(g_colorR, g_brightness),
-                               ledsScaleChannel(g_colorG, g_brightness),
-                               ledsScaleChannel(g_colorB, g_brightness));
-    } else {
-      ledsSendEffectToStrip(s, LEDS_HW_EFFECT_CODES[g_effect - 1]);
-      ledsSendEffectSpeedToStrip(s, g_speed);
-    }
-  }
-  ledsSendPowerToStrip(s, g_power, "connect");
+  ledsSendCurrentStateToStrip(s, "connect");
 }
 
 // Añade (o refresca RSSI/nombre de) un resultado de escaneo a la lista
@@ -743,6 +795,120 @@ static void ledsStartScan() {
 // ------------------------------ Programas horarios ---------------------------
 // ============================================================================
 
+// Indica si un programa esta vigente en el instante dado. Reutilizable en
+// cualquier proyecto con programas "dias + hora inicio + hora fin".
+//   - wday: dia de la semana de hoy (0=Domingo..6=Sabado, como tm_wday).
+//   - nowMinutes: minutos desde las 00:00 (0..1439).
+// Si inicio < fin el tramo es normal y se comprueba el dia de hoy. Si
+// inicio > fin el programa CRUZA medianoche: el tramo previo (>= inicio)
+// pertenece al dia de hoy y el tramo posterior (< fin) pertenece al dia en
+// que empezo, es decir AYER. Un programa con inicio == fin se ignora.
+static bool ledsProgramActiveNow(const LedProgram &p, int wday, int nowMinutes) {
+  if (!p.enabled) return false; // un programa desactivado NUNCA actua, aunque el horario coincida
+  int startMin = p.startHour * 60 + p.startMinute;
+  int endMin   = p.endHour * 60 + p.endMinute;
+  if (startMin == endMin) return false; // programa vacio
+  if (startMin < endMin) {
+    return p.days[wday] && nowMinutes >= startMin && nowMinutes < endMin;
+  }
+  if (nowMinutes >= startMin) return p.days[wday];        // antes de medianoche: dia de hoy
+  if (nowMinutes <  endMin)   return p.days[(wday + 6) % 7]; // despues de medianoche: dia de inicio = ayer
+  return false;
+}
+
+// Anota que aspecto (color/intensidad) del programa idx es el que esta
+// aplicado ahora, SIN enviar nada a las tiras. Sirve para detectar despues
+// si el programa se edita en caliente (ver ledsProgramLookChanged).
+static void ledsRememberProgramLook(int idx) {
+  LedProgram &p = g_programs[idx];
+  g_scheduleActiveIdx = idx;
+  g_scheduleAppliedR = p.colorR; g_scheduleAppliedG = p.colorG; g_scheduleAppliedB = p.colorB;
+  g_scheduleAppliedInt = p.intensity;
+}
+
+// true si el programa activo es distinto al aplicado o si su color/
+// intensidad se han editado desde la ultima vez que se aplicaron.
+static bool ledsProgramLookChanged(int idx) {
+  LedProgram &p = g_programs[idx];
+  return idx != g_scheduleActiveIdx ||
+         p.colorR != g_scheduleAppliedR || p.colorG != g_scheduleAppliedG ||
+         p.colorB != g_scheduleAppliedB || p.intensity != g_scheduleAppliedInt;
+}
+
+// Aplica el aspecto PROPIO del programa idx: color e intensidad, y fuerza
+// color estatico (g_effect = 0) para que un efecto de hardware activo no
+// impida que se vea el color del programa, ni en las tiras conectadas ni en
+// las que conecten despues (ledsTryConnectStrip reenvia el estado vigente).
+static void ledsApplyProgramLook(int idx) {
+  LedProgram &p = g_programs[idx];
+  g_colorR = p.colorR; g_colorG = p.colorG; g_colorB = p.colorB;
+  g_brightness = p.intensity;
+  g_effect = 0;
+  ledsRememberProgramLook(idx);
+  ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+  ledsSaveSettings(); // persiste el color/brillo adoptado, por si hay reinicio despues
+}
+
+// Marca un nuevo cambio de estado impuesto por el horario y abre la ventana
+// BLE de sincronizacion. LLAMAR DESPUES de haber actualizado g_power/color y
+// ANTES de enviar a las tiras: asi una tira que conecte a mitad ve la
+// generacion nueva junto con el estado nuevo.
+static void ledsBeginScheduleSync() {
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    g_strips[i].txFailed = false;   // los fallos viejos no cuentan para este cambio
+    g_strips[i].resendCount = 0;    // cada cambio de estado empieza con su propio cupo de reenvios
+  }
+  g_scheduleGen++;
+  g_scheduleSyncStartMs = millis();
+  g_scheduleSyncActive  = true;
+}
+
+// Confirma tira a tira que el estado del horario se ha entregado (conectada,
+// generacion enviada, sin fallos de envio y cola vacia) y cierra la ventana
+// BLE en cuanto todas lo tienen o se agota el tope de LEDS_SCHEDULE_SYNC_MAX_MS.
+// Si una tira conectada no recibio el ultimo estado (mutex ocupado al
+// repartirlo) o un write fallo, se le REENVIA el estado vigente en vez de
+// esperar. No bloqueante: se llama en cada vuelta de ledsLoop().
+static void ledsUpdateSyncFlags() {
+  if (!g_scheduleSyncActive) return;
+  unsigned long now = millis();
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || s.syncedGen == g_scheduleGen || !s.connected) continue;
+    bool queueFree = !s.pendingCmd && !s.pendingCmd2 && now >= s.nextTxAllowedMs;
+    if (!queueFree) continue; // aun hay algo en cola o no ha pasado el margen entre comandos
+
+    if (s.txFailed || s.stateSentGen != g_scheduleGen) {
+      // Falto entregar el estado. Cupo agotado: se abandona esta tira hasta el proximo cambio
+      // (asi una tira cuyos writes fallan siempre no mantiene el BLE abierto ni llena el log).
+      if (s.resendCount >= LEDS_SCHEDULE_MAX_RESENDS) {
+        s.txFailed = false;
+        s.syncedGen = g_scheduleGen;
+        Serial.printf("[LEDS] Tira %s: estado del horario no entregado tras %d reenvios, se abandona hasta el proximo cambio\n",
+                      s.mac.c_str(), LEDS_SCHEDULE_MAX_RESENDS);
+        continue;
+      }
+      // Reenvio SIN espera (timeout 0): si un intento de conexion retiene el mutex no se
+      // bloquea el loop(), simplemente se reintenta en la vuelta siguiente.
+      LedsMutexGuard guard(g_bleMutex, 0);
+      if (guard.locked()) {
+        s.txFailed = false;
+        s.resendCount++;
+        ledsSendCurrentStateToStrip(s, "schedule-resync");
+        Serial.printf("[LEDS] Reenvio de estado del horario a %s (%d/%d)\n", s.mac.c_str(), s.resendCount, LEDS_SCHEDULE_MAX_RESENDS);
+      }
+    } else {
+      s.syncedGen = g_scheduleGen; // entregado y cola vacia
+    }
+  }
+  if (!ledsScheduleSyncPending()) {
+    g_scheduleSyncActive = false; // todas sincronizadas: el BLE vuelve a cerrarse
+  } else if ((now - g_scheduleSyncStartMs) >= LEDS_SCHEDULE_SYNC_MAX_MS) {
+    g_scheduleSyncActive = false; // tope agotado: se abandona hasta el proximo cambio o hasta que alguien abra /leds
+    Serial.println("[LEDS] Sincronizacion del horario: tope agotado con tiras pendientes");
+  }
+}
+
 // Revisa los programas configurados y enciende/apaga el grupo cuando
 // corresponde. Usa el reloj del sistema (NTP), igual que schedule.cpp.
 static void ledsApplySchedule() {
@@ -757,43 +923,46 @@ static void ledsApplySchedule() {
   bool shouldBeOn = false;
   int activeProgramIdx = -1; // programa que gana la franja actual (el primero que coincide)
   for (int i = 0; i < LEDS_MAX_PROGRAMS; i++) {
-    LedProgram &p = g_programs[i];
-    // Un programa con el checkbox desactivado NUNCA actua, aunque su
-    // horario/dia coincida: es la condicion que manda por encima de todo.
-    if (!p.enabled || !p.days[wday]) continue;
-    int startMin = p.startHour * 60 + p.startMinute;
-    int endMin   = p.endHour * 60 + p.endMinute;
-    if (startMin == endMin) continue; // programa vacio, ignorar
-    bool inRange = (startMin < endMin)
-      ? (nowMinutes >= startMin && nowMinutes < endMin)         // tramo normal
-      : (nowMinutes >= startMin || nowMinutes < endMin);        // cruza medianoche
-    if (inRange) { shouldBeOn = true; activeProgramIdx = i; break; }
+    if (ledsProgramActiveNow(g_programs[i], wday, nowMinutes)) { shouldBeOn = true; activeProgramIdx = i; break; }
   }
+  g_scheduleSlotActive = shouldBeOn;
+
+  // Primera pasada con reloj valido tras arrancar: si estamos dentro de una
+  // franja y el grupo ya estaba encendido (guardado en NVS), se asume que
+  // lo encendio el horario y se le devuelve la propiedad del power, para que
+  // lo apague al terminar la franja. No se reaplica el aspecto (ya esta guardado).
+  if (!g_scheduleBootResolved) {
+    g_scheduleBootResolved = true;
+    if (shouldBeOn && g_power) {
+      g_scheduleOwnsPower   = true;
+      g_scheduleForcedState = true;
+      ledsRememberProgramLook(activeProgramIdx);
+      Serial.println("[LEDS] Arranque dentro de una franja con el grupo encendido: el horario retoma el control");
+      return;
+    }
+  }
+
+  // Al terminar la franja se levanta el apagado manual: la siguiente
+  // franja volvera a encender con normalidad.
+  if (!shouldBeOn) g_scheduleManualOff = false;
+  bool effectiveOn = shouldBeOn && !g_scheduleManualOff;
 
   // Solo actua si cambia respecto al ultimo estado forzado por el
   // programa, para no pisar constantemente un ajuste manual del usuario
   // ni generar trafico BLE innecesario.
-  if (shouldBeOn != g_scheduleForcedState) {
-    g_scheduleForcedState = shouldBeOn;
+  if (effectiveOn != g_scheduleForcedState) {
+    g_scheduleForcedState = effectiveOn;
 
-    if (shouldBeOn) {
+    if (effectiveOn) {
       // El horario ENCIENDE el grupo: esto siempre gana (asegura que el
       // programa se cumpla), y a partir de ahora el horario "es dueno"
       // del power hasta que el o el usuario lo cambien.
       g_power = true;
       g_scheduleOwnsPower = true;
-      g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
+      ledsBeginScheduleSync();
       // Color PRIMERO y power ON despues (ver nota en ledsTryConnectStrip):
       // el color es lo que reactiva la salida de forma fiable en esta tira.
-      if (activeProgramIdx >= 0) {
-        // Aplica el color e intensidad PROPIOS de este programa, no el
-        // color/brillo global (cada programa recuerda los suyos).
-        LedProgram &p = g_programs[activeProgramIdx];
-        g_colorR = p.colorR; g_colorG = p.colorG; g_colorB = p.colorB;
-        g_brightness = p.intensity;
-        ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
-        ledsSaveSettings(); // persiste el color/brillo adoptado, por si hay reinicio despues
-      }
+      ledsApplyProgramLook(activeProgramIdx); // color e intensidad PROPIOS del programa, sin efecto
       ledsApplyPowerToAllStrips(true, "schedule-on");
       Serial.println("[LEDS] Programa horario: grupo ENCENDIDO");
 
@@ -805,10 +974,20 @@ static void ledsApplySchedule() {
       // quedan desacoplados.
       g_power = false;
       g_scheduleOwnsPower = false;
-      g_scheduleWantsConnectionUntilMs = millis() + LEDS_SCHEDULE_CONNECT_WINDOW_MS;
+      g_scheduleActiveIdx = -1;
+      ledsBeginScheduleSync();
       ledsApplyPowerToAllStrips(false, "schedule-off");
+      ledsSaveSettings(); // persiste el apagado: si no, un reinicio volveria a encender el grupo
       Serial.println("[LEDS] Programa horario: grupo APAGADO");
     }
+
+  } else if (effectiveOn && g_scheduleOwnsPower && ledsProgramLookChanged(activeProgramIdx)) {
+    // Cambio en caliente con el grupo ya encendido por el horario: o bien
+    // empieza otro programa sin hueco entre medias (franjas consecutivas),
+    // o se ha editado el color/intensidad del programa activo.
+    ledsBeginScheduleSync();
+    ledsApplyProgramLook(activeProgramIdx);
+    Serial.println("[LEDS] Programa horario: aspecto actualizado en caliente");
   }
 }
 
@@ -900,6 +1079,16 @@ static void ledsLoadPrograms() {
     g_programs[i].colorB    = g_prefs.getUChar((pfx + "cb").c_str(), g_programs[i].colorB);
     g_programs[i].intensity = g_prefs.getUChar((pfx + "in").c_str(), g_programs[i].intensity);
   }
+  // Programas visibles en la web. Si la clave no existe (primer arranque tras
+  // actualizar) se infiere del ultimo programa activado, para no ocultar
+  // programas que ya funcionaban. Nunca baja del ultimo programa activado.
+  uint8_t vis = g_prefs.getUChar("progvis", 0);
+  uint8_t minVis = 1;
+  for (int i = LEDS_MAX_PROGRAMS - 1; i >= 0; i--) {
+    if (g_programs[i].enabled) { minVis = i + 1; break; }
+  }
+  if (vis < minVis) vis = minVis;
+  g_visiblePrograms = constrain((int)vis, 1, LEDS_MAX_PROGRAMS);
   g_prefs.end();
 }
 
@@ -921,6 +1110,7 @@ static void ledsSavePrograms() {
     g_prefs.putUChar((pfx + "cb").c_str(), g_programs[i].colorB);
     g_prefs.putUChar((pfx + "in").c_str(), g_programs[i].intensity);
   }
+  g_prefs.putUChar("progvis", g_visiblePrograms);
   g_prefs.end();
 }
 
@@ -1235,6 +1425,7 @@ el('speed').addEventListener('input', () => {
 });
 const PRESETS = ["#ff0000","#ff7800","#ffff00","#00ff00","#00ffff","#0000ff","#ff00ff","#ffffff"];
 const DAY_LABELS = ["D","L","M","X","J","V","S"];
+const DAY_ORDER = [1,2,3,4,5,6,0]; // orden visual L..D (los indices de datos siguen siendo 0 = domingo)
 let state = {};
 
 function post(cmd, extra) {
@@ -1306,17 +1497,18 @@ function renderStrips() {
 }
 
 // Cuantos programas se muestran actualmente. El backend siempre reserva
-// LEDS_MAX_PROGRAMS (5) slots fijos; aqui solo controlamos cuantos son
-// visibles ("Programa maestro" + los clonados). Se recuerda en el propio
-// navegador para que no reaparezcan/desaparezcan solos al recargar.
+// LEDS_MAX_PROGRAMS (5) slots fijos; aqui solo se muestran los visibles
+// ("Programa maestro" + los clonados). El numero lo guarda el ESP32
+// (state.visiblePrograms), asi todos los dispositivos ven lo mismo.
 const MAX_PROGRAMS = 5;
-let visibleProgramCount = parseInt(localStorage.getItem('visibleProgramCount') || '1');
-if (visibleProgramCount < 1) visibleProgramCount = 1;
-if (visibleProgramCount > MAX_PROGRAMS) visibleProgramCount = MAX_PROGRAMS;
+function visibleCount() {
+  const v = parseInt(state.visiblePrograms || 1);
+  return Math.min(MAX_PROGRAMS, Math.max(1, v));
+}
 
 function renderPrograms() {
   if (!state.programs) return;
-  const visible = state.programs.slice(0, visibleProgramCount);
+  const visible = state.programs.slice(0, visibleCount());
   el('programList').innerHTML = visible.map((p,i) => `
     <div class="panel progpanel">
       <div class="progtoprow">
@@ -1328,14 +1520,15 @@ function renderPrograms() {
       </div>
       <div class="progrow2">
         <div class="progdays">
-          ${DAY_LABELS.map((d,dIdx) =>
-            `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${d}</button>`).join('')}
+          ${DAY_ORDER.map(dIdx =>
+            `<button class="daybtn ${p.days[dIdx]?'active':''}" onclick="toggleProgDay(${i},${dIdx})">${DAY_LABELS[dIdx]}</button>`).join('')}
         </div>
         <div class="progtimes">
           <input type="time" value="${pad(p.startHour)}:${pad(p.startMinute)}" onchange="setProgTime(${i},'start',this.value)">
           <input type="time" value="${pad(p.endHour)}:${pad(p.endMinute)}" onchange="setProgTime(${i},'end',this.value)">
         </div>
       </div>
+      ${(p.startHour*60+p.startMinute) > (p.endHour*60+p.endMinute) ? '<div class="dim" style="font-size:11px;margin-top:4px;">Cruza medianoche: los dias marcados son los de inicio</div>' : ''}
       <div class="progrow3">
         <input type="color" value="${rgbToHex(p.colorR,p.colorG,p.colorB)}" onchange="setProgColor(${i},this.value)">
         <div class="progbright">
@@ -1344,19 +1537,19 @@ function renderPrograms() {
         </div>
       </div>
     </div>`).join('') +
-    (visibleProgramCount < MAX_PROGRAMS
+    (visibleCount() < MAX_PROGRAMS
       ? `<button class="clonebtn" onclick="cloneProgram()">+ CLONAR PROGRAMA</button>`
       : '');
 }
 function pad(n){ return String(n).padStart(2,'0'); }
 function toggleProgram(i){ post('setProgram', {index:i, enabled: !state.programs[i].enabled}); }
 // Clona el programa maestro (indice 0) en el siguiente slot libre: copia
-// horario, dias, color e intensidad, y lo activa en pantalla. El slot ya
-// existe en el backend (array fijo de 5), solo pasa a ser visible.
+// horario, dias, color e intensidad. El slot ya existe en el backend
+// (array fijo de 5); al escribirlo, el ESP32 lo marca como visible.
 function cloneProgram() {
-  if (visibleProgramCount >= MAX_PROGRAMS) return;
+  if (visibleCount() >= MAX_PROGRAMS) return;
   const src = state.programs[0];
-  const newIndex = visibleProgramCount;
+  const newIndex = visibleCount();
   post('setProgram', {
     index: newIndex,
     enabled: src.enabled,
@@ -1366,8 +1559,6 @@ function cloneProgram() {
     colorR: src.colorR, colorG: src.colorG, colorB: src.colorB,
     intensity: src.intensity
   });
-  visibleProgramCount++;
-  localStorage.setItem('visibleProgramCount', visibleProgramCount);
 }
 function toggleProgDay(i,d){
   const days = state.programs[i].days.slice();
@@ -1391,10 +1582,8 @@ function setProgIntensity(i, value) {
 // Solo se puede borrar el ultimo programa clonado (mantiene los indices
 // visibles siempre consecutivos: maestro + 0..N sin huecos).
 function deleteProgram(i) {
-  if (i !== visibleProgramCount - 1) return;
+  if (i !== visibleCount() - 1) return;
   post('deleteProgram', {index:i});
-  visibleProgramCount--;
-  localStorage.setItem('visibleProgramCount', visibleProgramCount);
 }
 
 el('btnPower').onclick = () => post('setPower', {power: !state.power});
@@ -1427,8 +1616,9 @@ setInterval(refreshState, 1200);
 
 // Construye el JSON de estado completo del modulo (para /api/leds/state).
 static String ledsBuildStateJson() {
-  StaticJsonDocument<1536> doc;
+  DynamicJsonDocument doc(3072); // en el heap (vale para ArduinoJson v6 y v7): con 6 tiras y 5 programas se necesitan ~2200 B
   doc["power"]      = g_power;
+  doc["visiblePrograms"] = g_visiblePrograms;
   doc["r"] = g_colorR; doc["g"] = g_colorG; doc["b"] = g_colorB;
   doc["brightness"] = g_brightness;
   doc["effect"]     = g_effect;
@@ -1466,7 +1656,7 @@ static String ledsBuildStateJson() {
 
 // Procesa un comando JSON recibido desde la pagina "/leds".
 static void ledsHandleCommand(const String &jsonStr) {
-  StaticJsonDocument<512> doc;
+  DynamicJsonDocument doc(768); // un setProgram con dias ocupa ~410 B: 512 quedaba justo
   if (deserializeJson(doc, jsonStr) != DeserializationError::Ok) {
     Serial.println("[LEDS] Comando con JSON invalido, se ignora");
     return;
@@ -1477,6 +1667,9 @@ static void ledsHandleCommand(const String &jsonStr) {
     g_power = doc["power"] | g_power;
     g_scheduleForcedState = g_power; // adopta el estado, evita que el horario lo pise en la siguiente pasada
     g_scheduleOwnsPower = false;     // a partir de ahora el power es manual, no del horario
+    // Apagar a mano DENTRO de una franja se respeta hasta que esa franja
+    // termine (el horario no reenciende en la vuelta siguiente del loop).
+    g_scheduleManualOff = (!g_power && g_scheduleSlotActive);
     // Color/efecto PRIMERO y power despues al encender (ver nota en
     // ledsTryConnectStrip): el color reactiva la salida de forma fiable
     // en esta tira, el opcode de power ON solo no siempre lo hace.
@@ -1582,6 +1775,9 @@ static void ledsHandleCommand(const String &jsonStr) {
       if (doc.containsKey("colorG")) p.colorG = doc["colorG"];
       if (doc.containsKey("colorB")) p.colorB = doc["colorB"];
       if (doc.containsKey("intensity")) p.intensity = constrain((int)doc["intensity"], 0, 100);
+      // Escribir en un slot oculto (clonar) lo hace visible: el numero de
+      // programas visibles vive en el ESP32 y es el mismo en todos los dispositivos.
+      if (index >= g_visiblePrograms) g_visiblePrograms = index + 1;
       ledsSavePrograms();
     }
 
@@ -1593,6 +1789,8 @@ static void ledsHandleCommand(const String &jsonStr) {
     if (index >= 0 && index < LEDS_MAX_PROGRAMS) {
       g_programs[index] = LedProgram();
       g_programs[index].enabled = false;
+      // Solo se puede borrar el ultimo visible (indices consecutivos): se oculta.
+      if (index >= 1 && index == g_visiblePrograms - 1) g_visiblePrograms = index;
       ledsSavePrograms();
     }
   }
@@ -1765,6 +1963,9 @@ void ledsLoop() {
 
   // --- Reintentos de resincronizacion de efecto entre tiras ---
   ledsFlushEffectRetry();
+
+  // --- Confirmacion de entrega del estado del horario a cada tira ---
+  ledsUpdateSyncFlags();
 
   // --- Programa horario ---
   ledsApplySchedule();
