@@ -78,7 +78,12 @@ struct LedStrip {
   bool     used = false;          // slot ocupado
   String   mac;                   // direccion MAC (identificador persistente)
   String   name;                  // nombre visible (del anuncio BLE, o la MAC si no hay)
-  bool     connected = false;     // conectada ahora mismo
+  // connected/connecting/removing/dropPending son volatile porque onDisconnect() (tarea interna de
+  // NimBLE) y la tarea de reconexion los escriben SIN tomar g_bleMutex (ver politica junto a g_bleMutex).
+  volatile bool connected   = false; // conectada ahora mismo
+  volatile bool connecting  = false; // connect()/descubrimiento GATT en curso (se hace FUERA del mutex)
+  volatile bool removing    = false; // la web pidio quitarla: la baja real la ejecuta la tarea de reconexion
+  volatile bool dropPending = false; // onDisconnect pide vaciar su cola de envio (lo hace quien tenga el mutex)
   // --- Sincronizacion con el horario (ver ledsUpdateSyncFlags) ---
   // stateSentGen: ultima "generacion" del horario cuyo estado COMPLETO (color/efecto + power) se
   //               encolo a esta tira; solo lo marca ledsSendCurrentStateToStrip (unica fuente de verdad).
@@ -140,6 +145,9 @@ static uint8_t  g_brightness = 100;   // 0-100 %
 static uint8_t       g_effectRetryCode    = 0;
 static uint8_t       g_effectRetriesLeft  = 0;
 static unsigned long g_effectRetryNextMs  = 0;
+// true si un setSpeed no pudo enviarse por tener el mutex BLE ocupado: ledsFlushSpeedRetry() lo
+// reenvia desde ledsLoop() en cuanto se pueda (asi la web no muestra una velocidad que la tira no tiene).
+static volatile bool g_speedRetryPending = false;
 static bool     g_power = false;      // ON/OFF general del grupo
 static uint8_t  g_effect = 0;         // 0 = sin efecto (color estatico); 1..LEDS_HW_EFFECT_COUNT = efecto nativo
 static uint8_t  g_speed = 50;         // 0-100 %, velocidad nativa del efecto en curso (solo aplica si g_effect>0)
@@ -162,12 +170,17 @@ static int        g_scanResultCount = 0;
 // "/api/leds/scanresults" (nucleo 1, dentro de loop()).
 static SemaphoreHandle_t g_scanMutex = nullptr;
 
-// Protege TODAS las llamadas a la API de NimBLE sobre clientes (connect,
-// disconnect, getService, getCharacteristic, writeValue) y los campos
-// client/writeChar/connected de LedStrip. Sin esto, la tarea de
-// reconexion (nucleo 0), los comandos web (tarea AsyncTCP) y los
-// callbacks de NimBLE (su propia tarea interna) pueden tocar el mismo
-// cliente BLE a la vez, lo que provoca cuelgues y reinicios aleatorios.
+// Protege las ESCRITURAS BLE (writeValue), la cola de envio de cada tira
+// (pendingCmd*), el alta de tiras y la PUBLICACION del estado de conexion
+// (client/writeChar/connected) de LedStrip. Sin esto, la tarea de
+// reconexion (nucleo 0), los comandos web (tarea AsyncTCP) y loop() pueden
+// tocar la misma tira a la vez, lo que provoca cuelgues y reinicios.
+// POLITICA (importante): el mutex se retiene SOLO durante operaciones
+// cortas. connect(), getService(), getCharacteristic() y disconnect() se
+// ejecutan FUERA del mutex (pueden tardar segundos) y onDisconnect() NUNCA
+// lo toma: corre en la tarea interna de NimBLE, y si esperase un mutex
+// retenido por un connect() que a su vez espera a NimBLE habria deadlock.
+// Quien lo pida desde loop()/AsyncTCP debe usar siempre un timeout finito.
 static SemaphoreHandle_t g_bleMutex = nullptr;
 // Protege g_prefs (NVS/Preferences): se guarda/carga desde la tarea del
 // webserver (comandos), la tarea de reconexion BLE y ledsLoop() (horario),
@@ -259,6 +272,12 @@ private:
 // web (tarea AsyncTCP): si no se consigue en este plazo, se descarta el
 // comando en vez de bloquear el servidor web indefinidamente.
 #define LEDS_BLE_MUTEX_TIMEOUT_MS 1000
+// Espera maxima del mutex BLE desde loop() y desde la tarea de reconexion: corta, porque si esta
+// ocupado se reintenta en la vuelta siguiente sin perder nada (la cola de envio se conserva).
+#define LEDS_LOOP_MUTEX_TIMEOUT_MS 20
+// Tamano maximo aceptado para el cuerpo de un POST a /api/leds/command (el mayor comando real
+// ronda los 450 B). Rechaza con 413 cualquier cuerpo mayor en vez de reservar memoria sin limite.
+#define LEDS_MAX_BODY_BYTES 1024
 
 // --- Estado de aplicacion del programa horario (para no repetir logs/acciones) ---
 static bool g_scheduleForcedState = false; // ultimo estado ON/OFF calculado por el horario (para detectar cambios)
@@ -309,7 +328,10 @@ static uint8_t ledsScaleChannel(uint8_t value, uint8_t brightnessPct) {
 // legible de que hace el comando, y el resultado de la escritura BLE,
 // para tener trazabilidad completa ante fallos.
 static void ledsSendRaw(LedStrip &s, const uint8_t *data, size_t len, const String &desc) {
-  if (!s.connected || s.writeChar == nullptr) {
+  // Copia local del puntero: onDisconnect() (sin mutex) puede poner s.writeChar a nullptr en
+  // paralelo, y comprobar y usar el campo por separado dejaria una ventana de desreferencia nula.
+  NimBLERemoteCharacteristic *ch = s.writeChar;
+  if (!s.connected || ch == nullptr) {
     Serial.printf("[LEDS][BLE-TX] %s: comando descartado (tira no conectada) [%s]\n",
                   s.mac.c_str(), desc.c_str());
     return;
@@ -322,7 +344,7 @@ static void ledsSendRaw(LedStrip &s, const uint8_t *data, size_t len, const Stri
   }
   // "true" = write sin respuesta (write-without-response): mas rapido y
   // es lo que esperan estas tiras; evita bloquear esperando ACK.
-  bool ok = s.writeChar->writeValue((uint8_t*)data, len, false);
+  bool ok = ch->writeValue((uint8_t*)data, len, false);
   if (!ok) s.txFailed = true; // el horario lo usara para no darla por sincronizada y reenviar
   Serial.printf("[LEDS][BLE-TX] %s (%s): [ %s] -> %s [%s]\n",
                 s.name.c_str(), s.mac.c_str(), hex.c_str(),
@@ -364,13 +386,33 @@ static void ledsQueueOrSend(LedStrip &s, const uint8_t *data, size_t len, const 
 // ya pueda recibirlo (margen cumplido). Se llama en cada vuelta de
 // ledsLoop(): es la pieza que hace que todo lo anterior sea no bloqueante.
 static void ledsFlushPendingTx() {
+  // Timeout FINITO en todos los accesos al mutex: esto corre en loop(), y esperarlo sin limite
+  // (portMAX_DELAY) congelaba el firmware entero mientras otra tarea lo retenia. Si no se consigue,
+  // se salta esa tira y se reintenta en la vuelta siguiente: la cola no se pierde.
   unsigned long now = millis();
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
     LedStrip &s = g_strips[i];
-    if (!s.used || !s.connected || !s.pendingCmd) continue;
+    if (!s.used) continue;
+
+    // onDisconnect() no puede tocar la cola (no toma el mutex): pide vaciarla con dropPending y
+    // la vaciamos aqui, con el mutex, para no pisar un envio que este en marcha en otra tarea.
+    if (s.dropPending) {
+      LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_LOOP_MUTEX_TIMEOUT_MS));
+      if (guard.locked()) {
+        s.dropPending = false;
+        s.pendingCmd  = false;
+        s.pendingCmd2 = false;
+      }
+      continue;
+    }
+
+    if (!s.connected || !s.pendingCmd) continue;
     if (now < s.nextTxAllowedMs) continue;
 
-    LedsMutexGuard guard(g_bleMutex);
+    LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_LOOP_MUTEX_TIMEOUT_MS));
+    if (!guard.locked()) continue; // mutex ocupado: se reintenta en la siguiente vuelta
+    if (!s.connected || !s.pendingCmd) continue; // pudo cambiar mientras esperabamos el mutex
+
     ledsSendRaw(s, s.pendingData, s.pendingLen, s.pendingDesc);
     s.nextTxAllowedMs = millis() + LEDS_TX_GAP_MS;
     s.pendingCmd = false;
@@ -557,6 +599,30 @@ static void ledsFlushEffectRetry() {
   g_effectRetryNextMs = millis() + LEDS_EFFECT_RESYNC_GAP_MS;
 }
 
+// Envia la velocidad NATIVA del efecto (0-100%) a todas las tiras conectadas del grupo.
+// Devuelve false si no se pudo tomar el mutex BLE en "timeoutTicks" (no se envia nada), para que
+// el llamante decida si reintenta. Reutilizable con cualquier grupo de tiras de este protocolo.
+static bool ledsApplySpeedToAllStrips(uint8_t speedPct, TickType_t timeoutTicks) {
+  LedsMutexGuard guard(g_bleMutex, timeoutTicks);
+  if (!guard.locked()) return false;
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    if (g_strips[i].used && g_strips[i].connected) {
+      ledsSendEffectSpeedToStrip(g_strips[i], speedPct);
+    }
+  }
+  return true;
+}
+
+// Reenvia (no bloqueante) una velocidad que quedo pendiente por mutex ocupado (ver setSpeed).
+// Se llama en cada vuelta de ledsLoop(). Se anula sola si ya no aplica (apagado o sin efecto).
+static void ledsFlushSpeedRetry() {
+  if (!g_speedRetryPending) return;
+  if (!g_power || g_effect == 0) { g_speedRetryPending = false; return; }
+  if (ledsApplySpeedToAllStrips(g_speed, pdMS_TO_TICKS(LEDS_LOOP_MUTEX_TIMEOUT_MS))) {
+    g_speedRetryPending = false;
+  }
+}
+
 // ============================================================================
 // ----------------------------- Conexion BLE ----------------------------------
 // ============================================================================
@@ -567,20 +633,21 @@ static void ledsFlushEffectRetry() {
 class LedsClientCallbacks : public NimBLEClientCallbacks {
 public:
   explicit LedsClientCallbacks(int stripIndex) : idx(stripIndex) {}
+  // IMPORTANTE: se ejecuta en la tarea interna de NimBLE y NO debe tomar g_bleMutex (ver la politica
+  // junto a g_bleMutex): esperarlo mientras un connect() lo retiene y espera a NimBLE es un deadlock.
+  // Solo escribe campos simples (volatile) y delega el vaciado de la cola en ledsFlushPendingTx()
+  // mediante dropPending: asi, al reconectar, no se reenvia un comando obsoleto (duplicados).
   void onDisconnect(NimBLEClient* client, int reason) override {
-    LedsMutexGuard guard(g_bleMutex);
     if (idx < 0 || idx >= LEDS_MAX_STRIPS) return;
-    g_strips[idx].connected = false;
-    g_strips[idx].writeChar = nullptr;
-    g_strips[idx].nextRetryMs = millis() + g_strips[idx].retryDelayMs;
-    // Descarta cualquier comando que quedara en cola sin enviar: si no se
-    // limpia aqui, al reconectar se reenvia un comando obsoleto (de antes
-    // de la desconexion) ademas del nuevo del propio reconnect, causando
-    // duplicados como el "apagado" enviado dos veces.
-    g_strips[idx].pendingCmd  = false;
-    g_strips[idx].pendingCmd2 = false;
+    LedStrip &s = g_strips[idx];
+    // Cliente obsoleto (tira quitada o slot reasignado): no tocar el estado de la tira actual.
+    if (s.client != client) return;
+    s.connected   = false;
+    s.writeChar   = nullptr;
+    s.nextRetryMs = millis() + s.retryDelayMs;
+    s.dropPending = true;
     Serial.printf("[LEDS] Tira %s desconectada, reintento en %lums\n",
-                  g_strips[idx].mac.c_str(), g_strips[idx].retryDelayMs);
+                  s.mac.c_str(), s.retryDelayMs);
   }
 private:
   int idx;
@@ -608,96 +675,130 @@ static void ledsSendCurrentStateToStrip(LedStrip &s, const char *source) {
   s.stateSentGen = g_scheduleGen; // el estado vigente (incluido el del horario) queda encolado para esta tira
 }
 
+// Cancela un intento de conexion BLE (o libera una tira que quedo a medias): desconecta si hace
+// falta, libera el slot de NimBLE (deleteClient) y programa el siguiente reintento con backoff.
+// NO necesita g_bleMutex: solo la tarea de reconexion crea/borra clientes y una tira no conectada
+// nunca recibe escrituras. Se anula s.client ANTES del delete para que un onDisconnect tardio vea
+// un cliente obsoleto y se ignore. Reutilizable con cualquier grupo de clientes NimBLE con backoff.
+static void ledsAbortConnect(LedStrip &s, NimBLEClient *client) {
+  if (client != nullptr && client->isConnected()) client->disconnect();
+  s.connected = false;
+  s.writeChar = nullptr;
+  s.client    = nullptr;
+  if (client != nullptr) NimBLEDevice::deleteClient(client); // libera el slot BLE (evita agotar el pool)
+  s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
+  s.nextRetryMs  = millis() + s.retryDelayMs;
+  s.connecting   = false;
+}
+
 // Intenta conectar (de forma NO bloqueante para el resto del sistema:
 // NimBLE hace la conexion en su propia tarea interna, pero la llamada de
 // connect() en si tarda hasta unos segundos, por eso solo se invoca cada
 // "retryDelayMs" y nunca en cada vuelta del loop) una tira concreta del
 // grupo, y localiza su caracteristica de escritura.
 static void ledsTryConnectStrip(LedStrip &s) {
-  LedsMutexGuard guard(g_bleMutex);
-  if (s.connected) return;
+  // connect(), getService() y getCharacteristic() pueden tardar segundos y dependen de la tarea
+  // interna de NimBLE, asi que se ejecutan FUERA de g_bleMutex (ver politica junto al mutex).
+  // Retenerlo durante todo el intento congelaba loop() y la web, y podia provocar un deadlock con
+  // onDisconnect(). Tres fases: (1) reservar con mutex, (2) conectar SIN mutex, (3) publicar con mutex.
+  NimBLEClient *client = nullptr;
+  String mac;
 
-  // Proteccion critica: nunca abrir mas conexiones BLE simultaneas de las
-  // que la libreria NimBLE tiene reservadas (ver comentario en
-  // LEDS_MAX_CONCURRENT_CONNECTIONS). Si ya estamos al limite, no se
-  // intenta conectar esta tira ahora: se reintentara mas adelante (por si
-  // otra tira se desconecta y libera un hueco), en vez de arriesgarse a
-  // reiniciar el ESP32.
-  int connectedNow = 0;
-  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-    if (g_strips[i].used && g_strips[i].connected) connectedNow++;
-  }
-  if (connectedNow >= LEDS_MAX_CONCURRENT_CONNECTIONS) {
-    s.nextRetryMs = millis() + LEDS_RECONNECT_MIN_MS;
-    return;
-  }
+  // ---- FASE 1 (con mutex, breve): comprobaciones, reserva del slot y marca "connecting" ----
+  {
+    LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+    if (!guard.locked()) return; // se reintentara en la siguiente vuelta de la tarea
+    if (!s.used || s.removing || s.connected || s.connecting) return;
 
-  Serial.printf("[LEDS] Conectando con tira %s...\n", s.mac.c_str());
-
-  if (s.client == nullptr) {
-    s.client = NimBLEDevice::createClient();
-    if (s.client == nullptr) {
-      // No deberia pasar (el contador de arriba ya limita a
-      // LEDS_MAX_CONCURRENT_CONNECTIONS), pero si ocurriera, NUNCA seguir
-      // adelante con un puntero nulo: eso es justo lo que causaba el
-      // panic (StoreProhibited) al añadir la 4a tira.
-      Serial.printf("[LEDS] Sin slots BLE libres para %s, reintentando mas tarde\n", s.mac.c_str());
+    // Proteccion critica: nunca abrir mas conexiones BLE simultaneas de las
+    // que la libreria NimBLE tiene reservadas (ver comentario en
+    // LEDS_MAX_CONCURRENT_CONNECTIONS). Si ya estamos al limite, no se
+    // intenta conectar esta tira ahora: se reintentara mas adelante (por si
+    // otra tira se desconecta y libera un hueco), en vez de arriesgarse a
+    // reiniciar el ESP32.
+    int busyNow = 0;
+    for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+      if (g_strips[i].used && (g_strips[i].connected || g_strips[i].connecting)) busyNow++;
+    }
+    if (busyNow >= LEDS_MAX_CONCURRENT_CONNECTIONS) {
       s.nextRetryMs = millis() + LEDS_RECONNECT_MIN_MS;
       return;
     }
-    int idx = (int)(&s - &g_strips[0]);
-    s.client->setClientCallbacks(new LedsClientCallbacks(idx), true);
-  }
-  // Sin esto, un intento de conexion a una tira apagada/lejana puede
-  // quedarse colgado con el timeout por defecto de NimBLE (mucho mas
-  // largo), congelando la tarea de reconexion (y antes, cuando esto se
-  // llamaba desde loop(), el sistema entero) durante ese tiempo.
-  s.client->setConnectTimeout(LEDS_CONNECT_TIMEOUT_MS);
 
-  NimBLEAddress addr(std::string(s.mac.c_str()), BLE_ADDR_PUBLIC);
-  bool ok = s.client->connect(addr);
-  if (!ok) {
-    Serial.printf("[LEDS] Fallo al conectar con %s\n", s.mac.c_str());
-    // CRITICO: liberar el slot de conexion ahora mismo. Sin este delete,
-    // una tira que nunca responde se queda con su cliente BLE creado para
-    // siempre, ocupando uno de los (pocos) slots de NimBLE de por vida:
-    // exactamente lo que agotaba el pool al llegar a la 4a tira.
-    NimBLEDevice::deleteClient(s.client);
-    s.client = nullptr;
-    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
-    s.nextRetryMs = millis() + s.retryDelayMs;
+    Serial.printf("[LEDS] Conectando con tira %s...\n", s.mac.c_str());
+
+    if (s.client == nullptr) {
+      s.client = NimBLEDevice::createClient();
+      if (s.client == nullptr) {
+        // No deberia pasar (el contador de arriba ya limita a
+        // LEDS_MAX_CONCURRENT_CONNECTIONS), pero si ocurriera, NUNCA seguir
+        // adelante con un puntero nulo: eso es justo lo que causaba el
+        // panic (StoreProhibited) al añadir la 4a tira.
+        Serial.printf("[LEDS] Sin slots BLE libres para %s, reintentando mas tarde\n", s.mac.c_str());
+        s.nextRetryMs = millis() + LEDS_RECONNECT_MIN_MS;
+        return;
+      }
+      int idx = (int)(&s - &g_strips[0]);
+      s.client->setClientCallbacks(new LedsClientCallbacks(idx), true);
+    }
+    // Sin esto, un intento de conexion a una tira apagada/lejana puede
+    // quedarse colgado con el timeout por defecto de NimBLE (mucho mas largo).
+    s.client->setConnectTimeout(LEDS_CONNECT_TIMEOUT_MS);
+
+    client = s.client;
+    mac    = s.mac;
+    s.connecting = true; // impide un 2o intento y cuenta como conexion ocupada
+  }
+
+  // ---- FASE 2 (SIN mutex): conexion y descubrimiento del servicio/caracteristica ----
+  // El cliente solo lo crea/borra esta tarea (las bajas las ejecuta ledsProcessPendingRemovals),
+  // asi que el puntero local es valido durante toda la fase.
+  NimBLEAddress addr(std::string(mac.c_str()), BLE_ADDR_PUBLIC);
+  const char *failReason = nullptr;
+  NimBLERemoteCharacteristic *ch = nullptr;
+
+  if (!client->connect(addr)) {
+    failReason = "fallo al conectar";
+  } else {
+    NimBLERemoteService *service = client->getService(LEDS_SERVICE_UUID);
+    if (service == nullptr) {
+      failReason = "conectada pero sin el servicio esperado";
+    } else {
+      ch = service->getCharacteristic(LEDS_CHAR_UUID);
+      if (ch == nullptr) failReason = "conectada pero sin la caracteristica esperada";
+    }
+    // Si onDisconnect() salto mientras descubriamos, no se puede dar por conectada.
+    if (failReason == nullptr && !client->isConnected()) failReason = "se desconecto durante el descubrimiento";
+  }
+
+  if (failReason != nullptr) {
+    Serial.printf("[LEDS] Tira %s: %s\n", mac.c_str(), failReason);
+    ledsAbortConnect(s, client); // libera el slot BLE y programa el reintento con backoff
     return;
   }
 
-  NimBLERemoteService* service = s.client->getService(LEDS_SERVICE_UUID);
-  if (service == nullptr) {
-    Serial.printf("[LEDS] %s conectada pero sin el servicio esperado\n", s.mac.c_str());
-    s.client->disconnect();
-    NimBLEDevice::deleteClient(s.client); // mismo motivo: liberar el slot
-    s.client = nullptr;
-    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
-    s.nextRetryMs = millis() + s.retryDelayMs;
-    return;
-  }
-  s.writeChar = service->getCharacteristic(LEDS_CHAR_UUID);
-  if (s.writeChar == nullptr) {
-    Serial.printf("[LEDS] %s conectada pero sin la caracteristica esperada\n", s.mac.c_str());
-    s.client->disconnect();
-    NimBLEDevice::deleteClient(s.client); // mismo motivo: liberar el slot
-    s.client = nullptr;
-    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
-    s.nextRetryMs = millis() + s.retryDelayMs;
+  // ---- FASE 3 (con mutex, breve): publicar la conexion y encolar el estado vigente ----
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    Serial.printf("[LEDS] Tira %s: mutex BLE ocupado al publicar la conexion, se reintentara\n", mac.c_str());
+    ledsAbortConnect(s, client);
     return;
   }
 
+  s.writeChar = ch;
   s.connected = true;
+  s.connecting = false;
   s.retryDelayMs = LEDS_RECONNECT_MIN_MS; // exito: resetea el backoff
+  // Cola limpia antes de encolar el estado: descarta cualquier resto de una conexion anterior.
+  s.dropPending = false;
+  s.pendingCmd  = false;
+  s.pendingCmd2 = false;
   // Margen antes de aceptar la primera orden: esta tira corta la conexion
   // si recibe algo demasiado pronto tras conectar. No es un delay(): solo
   // se fija un instante futuro, y ledsQueueOrSend()/ledsFlushPendingTx()
   // se encargan de esperar a que llegue sin bloquear nada.
   s.nextTxAllowedMs = millis() + LEDS_CONNECT_SETTLE_MS;
-  Serial.printf("[LEDS] Tira %s conectada correctamente\n", s.mac.c_str());
+  Serial.printf("[LEDS] Tira %s conectada correctamente\n", mac.c_str());
 
   // Al reconectar, se encola el reenvio del estado actual (color/efecto/
   // brillo/on-off vigentes) para que la tira quede igual que el resto del
@@ -1018,7 +1119,7 @@ static void ledsSaveGroup() {
   g_prefs.begin("leds", false); // lectura/escritura
   int count = 0;
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-    if (!g_strips[i].used) continue;
+    if (!g_strips[i].used || g_strips[i].removing) continue; // una tira en baja no se persiste
     String macKey  = "mac"  + String(count);
     String nameKey = "name" + String(count);
     g_prefs.putString(macKey.c_str(), g_strips[i].mac);
@@ -1626,11 +1727,11 @@ static String ledsBuildStateJson() {
 
   JsonArray strips = doc.createNestedArray("strips");
   for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-    if (!g_strips[i].used) continue;
+    if (!g_strips[i].used || g_strips[i].removing) continue; // las tiras en baja ya no se muestran
     JsonObject o = strips.createNestedObject();
     o["mac"] = g_strips[i].mac;
     o["name"] = g_strips[i].name;
-    o["connected"] = g_strips[i].connected;
+    o["connected"] = (bool)g_strips[i].connected; // cast: el campo es volatile
   }
 
   JsonArray programs = doc.createNestedArray("programs");
@@ -1714,12 +1815,10 @@ static void ledsHandleCommand(const String &jsonStr) {
     // Reenvia la velocidad nativa a las tiras solo si hay un efecto de
     // hardware activo ahora mismo (sin efecto, la velocidad no aplica).
     if (g_power && g_effect > 0) {
-      LedsMutexGuard guard(g_bleMutex);
-      for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-        if (g_strips[i].used && g_strips[i].connected) {
-          ledsSendEffectSpeedToStrip(g_strips[i], g_speed);
-        }
-      }
+      // Timeout FINITO: esto corre en la tarea AsyncTCP y no debe bloquear el servidor web. Si el
+      // mutex esta ocupado, el cambio no se pierde: ledsFlushSpeedRetry() lo reenvia desde ledsLoop().
+      g_speedRetryPending = !ledsApplySpeedToAllStrips(g_speed, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+      if (g_speedRetryPending) Serial.println("[LEDS] Mutex BLE ocupado, velocidad en reintento");
     }
     ledsSaveSettings();
 
@@ -1727,33 +1826,54 @@ static void ledsHandleCommand(const String &jsonStr) {
     String mac = doc["mac"] | "";
     String name = doc["name"] | mac;
     if (mac.length() > 0) {
-      for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-        if (!g_strips[i].used) {
-          g_strips[i] = LedStrip(); // reinicia el slot
-          g_strips[i].used = true;
-          g_strips[i].mac = mac;
-          g_strips[i].name = name;
-          g_strips[i].nextRetryMs = millis(); // intenta conectar ya
-          ledsSaveGroup();
-          Serial.printf("[LEDS] Tira anadida al grupo: %s (%s)\n", name.c_str(), mac.c_str());
-          break;
+      bool added = false;
+      {
+        // Con mutex (finito): la tarea de reconexion lee/escribe estos campos en paralelo. El slot
+        // se rellena entero y "used" se pone a true AL FINAL, asi nadie ve una tira a medio crear.
+        LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+        if (!guard.locked()) {
+          Serial.println("[LEDS] Mutex BLE ocupado, alta de tira descartada");
+        } else {
+          bool duplicated = false;
+          for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+            if (g_strips[i].used && !g_strips[i].removing && g_strips[i].mac.equalsIgnoreCase(mac)) duplicated = true;
+          }
+          if (duplicated) {
+            // Dos entradas para la misma MAC abririan dos clientes BLE contra el mismo dispositivo.
+            Serial.printf("[LEDS] Tira ya emparejada, se ignora el alta: %s\n", mac.c_str());
+          } else {
+            for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+              // Slot libre de verdad: sin uso, sin baja pendiente y sin cliente NimBLE asociado.
+              if (!g_strips[i].used && !g_strips[i].removing && g_strips[i].client == nullptr) {
+                g_strips[i] = LedStrip(); // reinicia el slot
+                g_strips[i].mac = mac;
+                g_strips[i].name = name;
+                g_strips[i].nextRetryMs = millis(); // intenta conectar ya
+                g_strips[i].used = true;            // SIEMPRE el ultimo
+                added = true;
+                Serial.printf("[LEDS] Tira anadida al grupo: %s (%s)\n", name.c_str(), mac.c_str());
+                break;
+              }
+            }
+          }
         }
       }
+      if (added) ledsSaveGroup(); // NVS fuera del mutex BLE, para no retenerlo durante la escritura
     }
 
   } else if (cmd == "removeStrip") {
     int index = doc["index"] | -1;
     int seen = -1;
     for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-      if (!g_strips[i].used) continue;
+      if (!g_strips[i].used || g_strips[i].removing) continue; // mismo criterio que el JSON que ve la web
       seen++;
       if (seen == index) {
-        if (g_strips[i].client != nullptr && g_strips[i].connected) {
-          LedsMutexGuard guard(g_bleMutex);
-          g_strips[i].client->disconnect();
-        }
-        g_strips[i] = LedStrip();
-        ledsSaveGroup();
+        // NO se toca el cliente BLE desde aqui (tarea AsyncTCP): desconectar puede tardar y liberar el
+        // cliente a mitad de un connect() en curso lo corrompe. Solo se marca la baja; la tarea de
+        // reconexion desconecta, hace deleteClient() y libera el slot (ledsProcessPendingRemovals).
+        g_strips[i].removing = true;
+        ledsSaveGroup(); // persiste ya la baja (ledsSaveGroup ignora las tiras marcadas)
+        Serial.printf("[LEDS] Tira marcada para baja: %s\n", g_strips[i].mac.c_str());
         break;
       }
     }
@@ -1853,12 +1973,27 @@ static void ledsRegisterWebRoutes() {
     },
     nullptr,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-      static String body;
-      if (index == 0) body = "";
-      body += String((char*)data).substring(0, len);
+      // Buffer POR PETICION en request->_tempObject: el propio servidor lo libera al destruir la
+      // peticion, incluso si el cliente corta a medias. Antes: un "static String" compartido entre
+      // peticiones simultaneas y String((char*)data), que leia fuera del buffer (sin terminador NUL).
+      if (index == 0) {
+        if (total == 0 || total > LEDS_MAX_BODY_BYTES) {
+          request->send(413, "application/json", "{\"ok\":false}");
+          return;
+        }
+        request->_tempObject = malloc(total + 1);
+        if (request->_tempObject == nullptr) {
+          request->send(500, "application/json", "{\"ok\":false}");
+          return;
+        }
+      }
+      char *buf = (char*)request->_tempObject;
+      if (buf == nullptr || index + len > total) return; // cuerpo ya rechazado o fragmento incoherente
+      memcpy(buf + index, data, len);
       if (index + len == total) {
+        buf[total] = '\0';
         ledsMarkWebPresence();
-        ledsHandleCommand(body);
+        ledsHandleCommand(String(buf));
         request->send(200, "application/json", "{\"ok\":true}");
       }
     });
@@ -1927,16 +2062,66 @@ void ledsInit() {
     g_colorR, g_colorG, g_colorB, g_brightness);
 }
 
+// Ejecuta las bajas de tiras pedidas desde la web (removing == true). Se hace aqui, en la tarea de
+// reconexion, porque es la UNICA que crea/borra clientes NimBLE: asi nunca se libera un cliente
+// mientras otra tarea lo usa. Desconecta FUERA del mutex, libera el slot BLE con deleteClient() (antes
+// se perdia: tras unas altas/bajas se agotaban los slots y las tiras dejaban de conectar) y marca el
+// slot como libre. Si el mutex esta ocupado se reintenta en la siguiente vuelta (removing sigue activo).
+static void ledsProcessPendingRemovals() {
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || !s.removing || s.connecting) continue;
+
+    NimBLEClient *client = s.client;
+    if (client != nullptr && client->isConnected()) client->disconnect(); // fuera del mutex
+
+    {
+      LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+      if (!guard.locked()) continue; // reintento en la siguiente vuelta
+      s.connected   = false;
+      s.writeChar   = nullptr;
+      s.client      = nullptr; // antes del delete: un onDisconnect tardio vera un cliente obsoleto
+      s.pendingCmd  = false;
+      s.pendingCmd2 = false;
+      s.dropPending = false;
+      s.removing    = false;
+      s.used        = false;   // el slot queda libre (mac/name se sobrescriben en el proximo alta)
+    }
+    if (client != nullptr) NimBLEDevice::deleteClient(client); // libera el slot de NimBLE
+    Serial.printf("[LEDS] Tira %d eliminada del grupo\n", i);
+  }
+}
+
+// Red de seguridad: como onDisconnect() ya no toma el mutex y solo escribe flags, si alguna vez una
+// desconexion no llegase a notificarse la tira se quedaria marcada como conectada para siempre. Aqui
+// se contrasta cada tira "conectada" con el estado real del cliente NimBLE y se corrige si difieren.
+static void ledsReconcileConnections() {
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || !s.connected || s.client == nullptr) continue;
+    if (s.client->isConnected()) continue;
+    s.connected   = false;
+    s.writeChar   = nullptr;
+    s.dropPending = true; // ledsFlushPendingTx() vaciara su cola
+    s.nextRetryMs = millis() + s.retryDelayMs;
+    Serial.printf("[LEDS] Tira %s: conexion perdida sin aviso, marcada como desconectada\n", s.mac.c_str());
+  }
+}
+
 // Tarea dedicada a la reconexion BLE (nucleo 0), separada por completo de
 // loop()/WebServer/AsyncTCP (nucleo 1). Antes esto se llamaba desde
 // loop(): un connect() lento o sin respuesta bloqueaba TODO el sistema
 // (WiFi, watchdog, web) durante segundos, provocando cuelgues/reinicios.
 static void ledsReconnectTaskFunc(void* pvParameters) {
   for (;;) {
+    ledsProcessPendingRemovals(); // bajas pedidas desde la web (con o sin presencia)
+    ledsReconcileConnections();   // corrige tiras "conectadas" cuyo enlace ya no existe
+
     if (ledsBleAllowedNow()) {
       unsigned long now = millis();
       for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
-        if (g_strips[i].used && !g_strips[i].connected && now >= g_strips[i].nextRetryMs) {
+        if (g_strips[i].used && !g_strips[i].removing && !g_strips[i].connected &&
+            now >= g_strips[i].nextRetryMs) {
           ledsTryConnectStrip(g_strips[i]);
           break; // una tira por vuelta, igual que antes
         }
@@ -1945,9 +2130,9 @@ static void ledsReconnectTaskFunc(void* pvParameters) {
       // Nadie viendo la pagina y ningun programa horario pendiente:
       // liberamos las conexiones BLE activas en vez de mantenerlas sin
       // necesidad (una por vuelta, mismo patron que la reconexion).
+      // disconnect() FUERA del mutex: puede tardar, y onDisconnect() ya no lo necesita.
       for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
         if (g_strips[i].used && g_strips[i].connected && g_strips[i].client != nullptr) {
-          LedsMutexGuard guard(g_bleMutex);
           g_strips[i].client->disconnect();
           break;
         }
@@ -1963,6 +2148,9 @@ void ledsLoop() {
 
   // --- Reintentos de resincronizacion de efecto entre tiras ---
   ledsFlushEffectRetry();
+
+  // --- Reintento de velocidad de efecto pendiente por mutex ocupado ---
+  ledsFlushSpeedRetry();
 
   // --- Confirmacion de entrega del estado del horario a cada tira ---
   ledsUpdateSyncFlags();
