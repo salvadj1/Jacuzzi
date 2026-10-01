@@ -91,19 +91,29 @@ svg{width:100%;height:auto;display:block;}
 .lv-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#8a5f0f;transition:width 1s linear;}
 .lv-tx{position:absolute;left:0;right:0;top:0;bottom:0;padding:0 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#fff;white-space:nowrap;}
 .lv-tx b{font-weight:900;}
-.clockprogrow{display:flex;gap:12px;}
-.clockbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;text-align:center;}
-.progbox{flex:1;background:#0d1512;border-radius:8px;padding:12px;}
-.cb-lbl{font-size:18px;font-weight:900;letter-spacing:.4px;color:#e8e08f;display:flex;align-items:center;justify-content:center;gap:3px;}
-.progbox .cb-lbl{justify-content:flex-start;}
-.cb-time{display:block;font-size:20px;font-weight:900;color:#7fe8ff;margin-top:4px;}
-.cb-date{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:var(--dim);}
-.cb-prog{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:#8fffb0;margin:4px 0;}
-.cb-days{display:block;font-size:18px;font-weight:900;letter-spacing:.4px;color:var(--dim);margin-top:3px;}
-.nextbanner{display:flex;justify-content:center;align-items:center;gap:10px;background:#1a1408;border:1px solid var(--amber);border-radius:8px;padding:9px 12px;margin-top:10px;white-space:nowrap;}
-.nb-lbl{font-size:12px;color:var(--amber);letter-spacing:.5px;font-weight:900;}
-.nb-cd{font-size:14px;color:#ffffff;font-weight:900;}
-.nb-day{font-size:12px;color:var(--dim);font-weight:900;}
+.clockprogrow{display:flex;flex-direction:column;}
+.clockbox,.progbox{background:transparent;padding:6px 6px 4px;}
+.clockbox.clickable,.progbox.clickable{cursor:pointer;}
+.clockbox.clickable:hover .cb-lbl,.progbox.clickable:hover .cb-lbl{color:var(--amber);}
+.progbox{border-top:1px solid #223229;margin-top:8px;padding-top:12px;}
+.progbox .cb-lbl{flex-wrap:wrap;row-gap:6px;}
+.cb-head{display:flex;align-items:center;gap:10px;}
+.cb-lbl{font-size:13px;font-weight:900;letter-spacing:1.5px;color:var(--dim);display:flex;align-items:center;gap:6px;}
+.cb-time{display:block;font-size:30px;font-weight:900;color:#7fe8ff;line-height:1;}
+.cb-sec{color:#4f8d9b;}
+.cb-date{display:block;font-size:17px;font-weight:900;letter-spacing:.4px;color:var(--dim);text-align:right;line-height:1.5;margin-left:auto;white-space:nowrap;}
+.tl{position:relative;height:74px;margin-top:4px;}
+.tl-track{position:absolute;left:0;right:0;top:30px;height:12px;border-radius:6px;background:#1b2622;}
+.tl-win{position:absolute;top:30px;height:12px;border-radius:6px;background:linear-gradient(90deg,#2eff7a,#16b8a0);display:none;}
+.tl-tick{position:absolute;top:43px;width:1px;height:5px;background:#3a4a44;}
+.tl-now{position:absolute;top:21px;width:2px;height:30px;background:#7fe8ff;transform:translateX(-50%);}
+.tl-nowlbl{position:absolute;top:0;transform:translateX(-50%);font-size:11px;font-weight:900;letter-spacing:1px;color:#7fe8ff;}
+.tl-edge{position:absolute;top:54px;transform:translateX(-50%);font-size:12px;font-weight:900;color:#8fffb0;white-space:nowrap;}
+.pchips{display:flex;gap:3px;margin-left:auto;}
+.pchip{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;letter-spacing:0;border-radius:6px;border:1px solid #22332c;color:#5d7268;}
+.pchip.on{background:rgba(46,255,122,.12);border-color:rgba(46,255,122,.4);color:#8fffb0;}
+.pchip.hoy{outline:1.5px solid #7fe8ff;outline-offset:1px;}
+.tl-dur{font-size:12px;font-weight:900;letter-spacing:1px;color:var(--dim);}
 .gear-icon{width:16px;height:16px;}
 .minibox .row2:last-child{border-bottom:none;}
 .minibox .row2 .cell{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--dim);letter-spacing:.3px;}
@@ -185,14 +195,10 @@ svg{width:100%;height:auto;display:block;}
   .minibox .row2 .cell .lbl{font-size:11px;}
   .minibox .row2 .cell b{font-size:12px;}
   .minibox .row2 .cell.mode b{font-size:12px;}
-  .cb-lbl{font-size:12px;}
-  .cb-time{font-size:14px;}
-  .cb-date{font-size:12px;}
-  .cb-prog{font-size:12px;}
-  .cb-days{font-size:12px;}
-  .nb-lbl{font-size:11px;}
-  .nb-cd{font-size:13px;}
-  .nb-day{font-size:11px;}
+  .cb-lbl{font-size:11px;}
+  .cb-time{font-size:24px;}
+  .cb-date{font-size:14px;}
+  .tl-edge{font-size:11px;}
   .vlbl{font-size:14px;}
   .pill{font-size:11px;padding:5px 10px;}
   .lv-pump,.lv-opt{font-size:12px;}
@@ -305,24 +311,28 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
     <div class="minibox">
       <div class="clockprogrow">
         <div class="clockbox clickable" id="clockRow">
-          <div class="cb-lbl">HORA ACTUAL
+          <div class="cb-head">
+            <b class="cb-time" id="statClock">—</b>
             <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span class="cb-date" id="statClockDate">—</span>
           </div>
-          <b class="cb-time" id="statClock">—</b>
-          <span class="cb-date" id="statClockDate">—</span>
         </div>
         <div class="progbox clickable" id="progRow">
           <div class="cb-lbl">PROGRAMA
             <svg class="gear-icon" viewBox="0 0 24 24" fill="none" stroke="#7fe8ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span class="tl-dur" id="progDur">—</span>
+            <div class="pchips" id="progChips"></div>
           </div>
-          <b class="cb-prog" id="progText">—</b>
-          <span class="cb-days" id="progDaysTxt">—</span>
+          <div class="tl" id="progTl">
+            <span class="tl-nowlbl" id="tlNowLbl">AHORA</span>
+            <div class="tl-track"></div>
+            <i class="tl-win" id="tlWinA"></i>
+            <i class="tl-win" id="tlWinB"></i>
+            <i class="tl-now" id="tlNow"></i>
+            <span class="tl-edge" id="tlStartLbl">—</span>
+            <span class="tl-edge" id="tlEndLbl">—</span>
+          </div>
         </div>
-      </div>
-      <div class="nextbanner" id="nextBanner">
-        <span class="nb-lbl">INICIA EN</span>
-        <b class="nb-cd" id="nextProgCd">—</b>
-        <span class="nb-day" id="nextProgDay"></span>
       </div>
       <div class="progedit" id="clockEdit">
         <div class="fila">
@@ -412,13 +422,11 @@ button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line);color:var
 
   <!-- ===== CAPA DE TEXTOS: se pinta la última para quedar siempre por encima de tuberías y formas ===== -->
   <g id="textLayer">
-    <!-- Medidor semicircular MAX. HOY (T1): arcos de color, aguja y valor blancos. Los arcos se generan por JS (buildGauge) -->
+    <!-- Termometro vertical MAX. HOY (T1): tubo, escala y liquido degradado se generan por JS (buildGauge); el puntero, el valor y la etiqueta se mueven con el maximo (updateMaxGauge) -->
     <g id="t1GaugeZones"></g>
-    <line id="t1GaugeNeedle" x1="0" y1="0" x2="0" y2="0" stroke="#ffffff" stroke-width="3" stroke-linecap="round" style="display:none"/>
-    <text x="102" y="440" text-anchor="middle" class="lbl">MAX. HOY</text>
-    <text x="102" y="466" text-anchor="middle" class="max-badge" id="maxT1Badge" font-size="26">—</text>
-    <text x="48" y="479" text-anchor="middle" class="lbl" font-size="11">20°</text>
-    <text x="156" y="479" text-anchor="middle" class="lbl" font-size="11">50°</text>
+    <path id="t1GaugePtr" d="" style="display:none"/>
+    <text x="90" y="435" text-anchor="start" class="max-badge" id="maxT1Badge" font-size="26">—</text>
+    <text x="90" y="451" text-anchor="start" class="lbl" id="maxT1Lbl">MAX. HOY</text>
     <text x="54" y="570" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T1</text>
 
     <text x="416" y="399.5" text-anchor="middle" class="badge" fill="var(--amber)" font-size="8">T2</text>
@@ -521,53 +529,94 @@ function applyValve(id, open){
 // muestras de hoy. Se refresca cada 5 min (ver fetchDailyMax).
 let dailyMaxT1 = null;
 
-// ---- Medidor semicircular MAX. HOY (T1) ----
-// Escala 20-50 C sobre 180 grados. Zonas de color (limite superior de cada
-// una): azul frio, verde templado, ambar ideal, rojo demasiado caliente.
-const G_CX = 102, G_CY = 462, G_R = 54;
+// ---- Termometro vertical MAX. HOY (T1) ----
+// Escala 20-50 C sobre un tubo vertical. El liquido usa un degradado continuo
+// (cian frio -> verde -> ambar -> rojo) anclado a la escala absoluta, de modo
+// que el color de la punta ya indica lo caliente que ha llegado el agua.
+const G_TX = 64, G_TW = 13;          // centro X y ancho del tubo
+const G_TOP = 398, G_BOT = 457;      // Y de 50 C (arriba) y de 20 C (abajo)
+const G_BULB_Y = 467;                // centro Y del bulbo
 const G_MIN = 20, G_MAX = 50;
-const G_ZONES = [
-  { to: 28, color: '#00c8f0' },
-  { to: 32, color: '#2eff7a' },
-  { to: 36, color: '#ffb020' },
-  { to: 50, color: '#ff3b2e' }
+const G_STOPS = [                    // [temperatura, [r,g,b]]
+  [20, [0, 200, 240]],
+  [30, [46, 255, 122]],
+  [36, [255, 176, 32]],
+  [50, [255, 59, 46]]
 ];
 
-// Punto del medidor para una temperatura "v" a un radio "r" desde el centro.
-function gaugePt(v, r){
+// Color del degradado para una temperatura "v" (se limita a 20-50 C).
+function gaugeColor(v){
+  v = Math.min(G_MAX, Math.max(G_MIN, v));
+  for(let i = 1; i < G_STOPS.length; i++){
+    const a = G_STOPS[i-1], b = G_STOPS[i];
+    if(v <= b[0]){
+      const k = (v - a[0]) / (b[0] - a[0]);
+      return 'rgb(' + a[1].map((c, j)=> Math.round(c + (b[1][j] - c) * k)).join(',') + ')';
+    }
+  }
+  return 'rgb(' + G_STOPS[G_STOPS.length-1][1].join(',') + ')';
+}
+
+// Coordenada Y (SVG) de una temperatura "v" sobre el tubo.
+function gaugeY(v){
   const f = Math.min(1, Math.max(0, (v - G_MIN) / (G_MAX - G_MIN)));
-  const a = Math.PI * f;                       // 0 = izquierda, PI = derecha
-  return [G_CX - r * Math.cos(a), G_CY - r * Math.sin(a)];
+  return G_BOT - f * (G_BOT - G_TOP);
 }
 
-// Dibuja los arcos de color segun G_ZONES (se llama una sola vez al cargar).
+// Dibuja tubo, bulbo, degradado y escala (se llama una sola vez al cargar).
 function buildGauge(){
+  const NS = 'http://www.w3.org/2000/svg';
   const g = el('t1GaugeZones');
-  let from = G_MIN;
-  G_ZONES.forEach(z=>{
-    const p1 = gaugePt(from, G_R), p2 = gaugePt(z.to, G_R);
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', 'M' + p1[0].toFixed(1) + ' ' + p1[1].toFixed(1) +
-      ' A' + G_R + ' ' + G_R + ' 0 0 1 ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1));
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', z.color);
-    path.setAttribute('stroke-width', '12');
-    g.appendChild(path);
-    from = z.to;
-  });
+  const mk = (tag, attrs, parent)=>{
+    const n = document.createElementNS(NS, tag);
+    for(const k in attrs) n.setAttribute(k, attrs[k]);
+    (parent || g).appendChild(n);
+    return n;
+  };
+  // Degradado vertical fijo a la escala (userSpaceOnUse)
+  const lg = mk('linearGradient', { id:'thermoGrad', gradientUnits:'userSpaceOnUse',
+                                    x1:0, y1:G_BOT, x2:0, y2:G_TOP }, mk('defs', {}));
+  G_STOPS.forEach(st=> mk('stop', { offset:(st[0]-G_MIN)/(G_MAX-G_MIN),
+                                    'stop-color':'rgb(' + st[1].join(',') + ')' }, lg));
+  // Tubo y bulbo (fondo)
+  mk('rect', { x:G_TX - G_TW/2, y:G_TOP, width:G_TW, height:G_BULB_Y - G_TOP, rx:G_TW/2, fill:'#1b2622' });
+  mk('circle', { cx:G_TX, cy:G_BULB_Y, r:10, fill:'#1b2622' });
+  // Liquido (su Y y alto los fija updateMaxGauge) y bulbo interior
+  mk('rect', { id:'t1ThermoLiq', x:G_TX - 4, y:G_BOT, width:8, height:0, rx:4,
+               fill:'url(#thermoGrad)', style:'display:none' });
+  mk('circle', { cx:G_TX, cy:G_BULB_Y, r:7, fill:'rgb(' + G_STOPS[0][1].join(',') + ')' });
+  // Escala: marca cada 5 C, etiqueta cada 10 C
+  for(let t = G_MIN; t <= G_MAX; t += 5){
+    const y = gaugeY(t), x2 = G_TX - G_TW/2 - 3, x1 = x2 - (t % 10 ? 4 : 7);
+    mk('line', { x1:x1, y1:y.toFixed(1), x2:x2, y2:y.toFixed(1), stroke:'#3a4a44', 'stroke-width':1.5 });
+    if(t % 10 === 0){
+      const tx = mk('text', { x:x1 - 4, y:(y + 4).toFixed(1), 'text-anchor':'end', 'font-size':11,
+                              class:'lbl', style:'fill:var(--dim)' });
+      tx.textContent = t + '°';
+    }
+  }
 }
 
-// Pinta el valor y la aguja con el maximo de hoy (dailyMaxT1).
-// Sin datos: muestra "—" y oculta la aguja.
+// Pinta liquido, puntero y valor con el maximo de hoy (dailyMaxT1).
+// El valor y la etiqueta siguen la altura del puntero. Sin datos: muestra
+// "—" centrado y oculta liquido y puntero.
 function updateMaxGauge(){
   const has = (dailyMaxT1 !== null);
-  const needle = el('t1GaugeNeedle');
-  el('maxT1Badge').textContent = has ? dailyMaxT1.toFixed(1) + '°' : '—';
-  needle.style.display = has ? '' : 'none';
+  const ptr = el('t1GaugePtr'), liq = el('t1ThermoLiq');
+  const badge = el('maxT1Badge'), lbl = el('maxT1Lbl');
+  badge.textContent = has ? dailyMaxT1.toFixed(1) + '°' : '—';
+  ptr.style.display = has ? '' : 'none';
+  liq.style.display = has ? '' : 'none';
+  const y = has ? gaugeY(dailyMaxT1) : (G_TOP + G_BOT) / 2;
+  badge.setAttribute('y', (y + 9).toFixed(1));
+  lbl.setAttribute('y', (y + 25).toFixed(1));
   if(!has) return;
-  const p1 = gaugePt(dailyMaxT1, G_R - 8), p2 = gaugePt(dailyMaxT1, G_R + 8);
-  needle.setAttribute('x1', p1[0].toFixed(1)); needle.setAttribute('y1', p1[1].toFixed(1));
-  needle.setAttribute('x2', p2[0].toFixed(1)); needle.setAttribute('y2', p2[1].toFixed(1));
+  liq.setAttribute('y', y.toFixed(1));
+  liq.setAttribute('height', (G_BULB_Y - y).toFixed(1));
+  const px = G_TX + G_TW/2 + 5;
+  ptr.setAttribute('d', 'M' + px + ' ' + y.toFixed(1) + 'L' + (px + 8) + ' ' + (y - 5).toFixed(1) +
+                        'L' + (px + 8) + ' ' + (y + 5).toFixed(1) + 'Z');
+  ptr.setAttribute('fill', gaugeColor(dailyMaxT1));
 }
 
 // Pide el historico y guarda el T1 mas alto de las muestras de hoy.
@@ -673,31 +722,88 @@ function estimatedNow(){
 
 function pad2(n){ return String(n).padStart(2,'0'); }
 
+// Marcas horarias (cada 3 h) bajo la barra de la linea de tiempo. Una sola vez.
+function buildTimelineTicks(){
+  const tl = el('progTl');
+  for(let h = 0; h <= 24; h += 3){
+    const t = document.createElement('i');
+    t.className = 'tl-tick';
+    t.style.left = (h / 24 * 100) + '%';
+    tl.appendChild(t);
+  }
+}
+
+// Linea de tiempo de 24 h del programa: franja de filtracion (verde), marcador
+// de la hora actual, etiquetas de inicio/fin, chips de dias y duracion.
+// Soporta franjas que cruzan medianoche (dos barras). "s" = state.schedule.
+let chipsSig = '';
+function renderProgTimeline(s){
+  const now = estimatedNow();
+  const pct = m => m / 1440 * 100;
+  const a = s.startHour * 60 + s.startMinute;
+  const b = s.endHour * 60 + s.endMinute;
+  const clamp = p => Math.min(92, Math.max(8, p));
+  const setWin = (e, from, to)=>{
+    e.style.display = 'block';
+    e.style.left = from + '%';
+    e.style.width = (to - from) + '%';
+  };
+  const winA = el('tlWinA'), winB = el('tlWinB');
+  const ls = el('tlStartLbl'), le = el('tlEndLbl');
+  const fmt = (h, m)=> pad2(h) + ':' + pad2(m);
+
+  // Franja: normal (una barra), que cruza medianoche (dos) o vacia (inicio = fin)
+  winB.style.display = 'none';
+  if(a === b){
+    winA.style.display = 'none';
+    ls.style.display = 'none'; le.style.display = 'none';
+  } else {
+    if(a < b){ setWin(winA, pct(a), pct(b)); }
+    else     { setWin(winA, pct(a), 100); setWin(winB, 0, pct(b)); }
+    // Etiquetas de inicio/fin; si quedan muy juntas se funden en una sola
+    const ps = pct(a), pe = pct(b);
+    if(Math.abs(ps - pe) < 18){
+      ls.textContent = fmt(s.startHour, s.startMinute) + '–' + fmt(s.endHour, s.endMinute);
+      ls.style.left = clamp((ps + pe) / 2) + '%';
+      ls.style.display = ''; le.style.display = 'none';
+    } else {
+      ls.textContent = fmt(s.startHour, s.startMinute); ls.style.left = clamp(ps) + '%';
+      le.textContent = fmt(s.endHour, s.endMinute);     le.style.left = clamp(pe) + '%';
+      ls.style.display = ''; le.style.display = '';
+    }
+  }
+
+  // Marcador de la hora actual
+  const nowPct = pct(now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60);
+  el('tlNow').style.left = nowPct + '%';
+  el('tlNowLbl').style.left = clamp(nowPct) + '%';
+
+  // Chips de dias (solo se reconstruyen si cambian los dias o el dia de hoy)
+  const hoy = now.getDay();
+  const sig = s.days.join('') + '|' + hoy;
+  if(sig !== chipsSig){
+    chipsSig = sig;
+    el('progChips').innerHTML = DIAS_ORDEN.map(i=>
+      '<span class="pchip' + (s.days[i] ? ' on' : '') + (i === hoy ? ' hoy' : '') + '">' + DIAS_LBL[i] + '</span>').join('');
+  }
+
+  // Duracion de la franja (0 = inicio igual a fin: nunca se activa)
+  const dur = (b - a + 1440) % 1440;
+  el('progDur').textContent = dur ? (Math.floor(dur / 60) + ' h' + (dur % 60 ? ' ' + (dur % 60) + ' min' : '')) : '—';
+}
+
 function renderSchedule(){
   if(!state) return;
   const s = state.schedule;
 
   {
     const now = estimatedNow();
-    el('statClock').textContent = now.toLocaleTimeString('es-ES');
-    el('statClockDate').textContent = now.toLocaleDateString('es-ES');
+    el('statClock').innerHTML = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) +
+      '<span class="cb-sec">:' + pad2(now.getSeconds()) + '</span>';
+    const wd = now.toLocaleDateString('es-ES', { weekday:'short' }).replace('.', '').toUpperCase();
+    el('statClockDate').textContent = wd + ' ' + pad2(now.getDate()) + '/' + pad2(now.getMonth() + 1) + '/' + now.getFullYear();
   }
-  const diasTxt = DIAS_ORDEN.filter(i=> s.days[i]).map(i=> DIAS_LBL[i]).join(' ');
-  el('progText').textContent = `${pad2(s.startHour)}:${pad2(s.startMinute)} - ${pad2(s.endHour)}:${pad2(s.endMinute)}`;
-  el('progDaysTxt').textContent = diasTxt;
-
-  if(state.nextStart > 0){
-    const next = new Date(state.nextStart*1000);
-    const diaRaw = next.toLocaleDateString('es-ES',{weekday:'short'});
-    const dia = diaRaw.charAt(0).toUpperCase() + diaRaw.slice(1);
-    const diffMin = Math.max(0, Math.round((next-estimatedNow())/60000));
-    const h = Math.floor(diffMin/60), m = diffMin%60;
-    el('nextProgCd').textContent = h>0 ? `${h}h ${m}m` : `${m}m`;
-    el('nextProgDay').textContent = `· ${dia} ${pad2(next.getHours())}:${pad2(next.getMinutes())}`;
-  } else {
-    el('nextProgCd').textContent = 'Sin programas';
-    el('nextProgDay').textContent = '';
-  }
+  renderProgTimeline(s);
 
   el('tempSetVal').textContent = state.targetTemp.toFixed(1)+' °C';
   el('solarDisVal').textContent = state.solarDischargeTemp.toFixed(1)+' °C';
@@ -871,6 +977,7 @@ el('btnRestart').onclick = ()=>{
 setInterval(renderSchedule, 1000);
 
 buildGauge();
+buildTimelineTicks();
 updateMaxGauge();
 fetchDailyMax();
 setInterval(fetchDailyMax, 300000); // refresca el maximo del dia cada 5 min
