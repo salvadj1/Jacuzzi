@@ -671,6 +671,12 @@ static void ledsSendCurrentStateToStrip(LedStrip &s, const char *source) {
       ledsSendEffectSpeedToStrip(s, g_speed);
     }
   }
+  else if (g_scheduleSyncActive) {
+    // APAGADO impuesto por el horario (ventana de sincronizacion abierta): se envia color negro
+    // ANTES del opcode OFF. Asi, aunque la tira ignore el opcode de apagado (igual que a veces
+    // ignora el de encendido sin color), la salida queda a 0 de todas formas.
+    ledsSendColorToStrip(s, 0, 0, 0);
+  }
   ledsSendPowerToStrip(s, g_power, source);
   s.stateSentGen = g_scheduleGen; // el estado vigente (incluido el del horario) queda encolado para esta tira
 }
@@ -686,7 +692,15 @@ static void ledsAbortConnect(LedStrip &s, NimBLEClient *client) {
   s.writeChar = nullptr;
   s.client    = nullptr;
   if (client != nullptr) NimBLEDevice::deleteClient(client); // libera el slot BLE (evita agotar el pool)
-  s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
+  // Mientras la ventana BLE del horario esta abierta (hay tiras sin recibir el estado del
+  // programa) NO se deja crecer el backoff: se reintenta siempre con el minimo, para que una tira
+  // con un fallo puntual no tarde hasta 30 s en recibir el encendido/apagado. Fuera de la ventana
+  // se mantiene el backoff progresivo de siempre (no machacar el radio si la tira esta apagada).
+  if (ledsScheduleSyncWindowOpen()) {
+    s.retryDelayMs = LEDS_RECONNECT_MIN_MS;
+  } else {
+    s.retryDelayMs = min((unsigned long)LEDS_RECONNECT_MAX_MS, s.retryDelayMs + LEDS_RECONNECT_STEP_MS);
+  }
   s.nextRetryMs  = millis() + s.retryDelayMs;
   s.connecting   = false;
 }
@@ -945,9 +959,34 @@ static void ledsApplyProgramLook(int idx) {
   g_colorR = p.colorR; g_colorG = p.colorG; g_colorB = p.colorB;
   g_brightness = p.intensity;
   g_effect = 0;
+  g_effectRetriesLeft = 0; // cancela reintentos de efecto pendientes (antes lo hacia ledsApplyColorToAllStrips)
   ledsRememberProgramLook(idx);
-  ledsApplyColorToAllStrips(g_colorR, g_colorG, g_colorB);
+  // OJO: ya NO envia nada a las tiras. Solo fija el estado (color/brillo/efecto). El envio lo hace
+  // ledsPushScheduleStateToConnectedStrips(), que ademas marca stateSentGen para que
+  // ledsUpdateSyncFlags() no reenvie el mismo estado por duplicado.
   ledsSaveSettings(); // persiste el color/brillo adoptado, por si hay reinicio despues
+}
+
+// Envia el estado COMPLETO vigente del horario (color + power ON, o color negro + power OFF) a
+// todas las tiras conectadas, en una sola toma del mutex BLE, y marca stateSentGen de cada una
+// (lo hace ledsSendCurrentStateToStrip). Asi el control de sincronizacion sabe que ya se envio y
+// no reenvia lo mismo. Una tira con la cola de envio ocupada se SALTA a proposito: encolar encima
+// pisaria el 2o comando (el color se perderia). Al no marcarla, ledsUpdateSyncFlags() le reenviara
+// el estado en cuanto su cola quede libre. Reutilizable con cualquier grupo de tiras de este
+// protocolo que necesite repartir un estado y confirmar su entrega.
+static void ledsPushScheduleStateToConnectedStrips(const char *source) {
+  LedsMutexGuard guard(g_bleMutex, pdMS_TO_TICKS(LEDS_BLE_MUTEX_TIMEOUT_MS));
+  if (!guard.locked()) {
+    // Nada se marca como enviado: ledsUpdateSyncFlags() reenviara el estado a cada tira.
+    Serial.println("[LEDS] Mutex BLE ocupado, estado del horario pendiente de reenvio");
+    return;
+  }
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || !s.connected) continue;
+    if (s.pendingCmd || s.pendingCmd2) continue; // cola ocupada: se reenviara desde la sincronizacion
+    ledsSendCurrentStateToStrip(s, source);
+  }
 }
 
 // Marca un nuevo cambio de estado impuesto por el horario y abre la ventana
@@ -962,6 +1001,15 @@ static void ledsBeginScheduleSync() {
   g_scheduleGen++;
   g_scheduleSyncStartMs = millis();
   g_scheduleSyncActive  = true;
+  // Las tiras desconectadas (el caso normal: el BLE esta cerrado sin nadie en /leds) pueden traer
+  // un backoff largo heredado de fallos anteriores. Se resetea para que la tarea de reconexion las
+  // intente YA y con el intervalo minimo, en vez de esperar hasta 30 s cada una.
+  for (int i = 0; i < LEDS_MAX_STRIPS; i++) {
+    LedStrip &s = g_strips[i];
+    if (!s.used || s.connected || s.connecting) continue;
+    s.retryDelayMs = LEDS_RECONNECT_MIN_MS;
+    s.nextRetryMs  = millis();
+  }
 }
 
 // Confirma tira a tira que el estado del horario se ha entregado (conectada,
@@ -1048,6 +1096,18 @@ static void ledsApplySchedule() {
   if (!shouldBeOn) g_scheduleManualOff = false;
   bool effectiveOn = shouldBeOn && !g_scheduleManualOff;
 
+  // FIX (los LEDs no se apagaban): si hay franja vigente y el grupo YA estaba encendido (a mano o
+  // guardado en NVS), el estado calculado coincide con g_scheduleForcedState y mas abajo no se
+  // entra en la rama de "encender", asi que el horario nunca llegaba a ser dueno del power y al
+  // terminar la franja no apagaba. Aqui el horario toma la propiedad en cuanto empieza la franja,
+  // para que la apague al terminar. Si el usuario apago a mano (g_scheduleManualOff) effectiveOn
+  // es false y no se entra aqui: el apagado manual se sigue respetando.
+  if (effectiveOn && g_power && !g_scheduleOwnsPower) {
+    g_scheduleOwnsPower   = true;
+    g_scheduleForcedState = true;
+    Serial.println("[LEDS] Franja vigente con el grupo ya encendido: el horario toma el control del apagado");
+  }
+
   // Solo actua si cambia respecto al ultimo estado forzado por el
   // programa, para no pisar constantemente un ajuste manual del usuario
   // ni generar trafico BLE innecesario.
@@ -1063,8 +1123,8 @@ static void ledsApplySchedule() {
       ledsBeginScheduleSync();
       // Color PRIMERO y power ON despues (ver nota en ledsTryConnectStrip):
       // el color es lo que reactiva la salida de forma fiable en esta tira.
-      ledsApplyProgramLook(activeProgramIdx); // color e intensidad PROPIOS del programa, sin efecto
-      ledsApplyPowerToAllStrips(true, "schedule-on");
+      ledsApplyProgramLook(activeProgramIdx); // fija color e intensidad PROPIOS del programa, sin efecto
+      ledsPushScheduleStateToConnectedStrips("schedule-on"); // color + power ON en un solo reparto
       Serial.println("[LEDS] Programa horario: grupo ENCENDIDO");
 
     } else if (g_scheduleOwnsPower) {
@@ -1077,7 +1137,7 @@ static void ledsApplySchedule() {
       g_scheduleOwnsPower = false;
       g_scheduleActiveIdx = -1;
       ledsBeginScheduleSync();
-      ledsApplyPowerToAllStrips(false, "schedule-off");
+      ledsPushScheduleStateToConnectedStrips("schedule-off"); // color negro + power OFF en un solo reparto
       ledsSaveSettings(); // persiste el apagado: si no, un reinicio volveria a encender el grupo
       Serial.println("[LEDS] Programa horario: grupo APAGADO");
     }
@@ -1088,6 +1148,7 @@ static void ledsApplySchedule() {
     // o se ha editado el color/intensidad del programa activo.
     ledsBeginScheduleSync();
     ledsApplyProgramLook(activeProgramIdx);
+    ledsPushScheduleStateToConnectedStrips("schedule-look");
     Serial.println("[LEDS] Programa horario: aspecto actualizado en caliente");
   }
 }
